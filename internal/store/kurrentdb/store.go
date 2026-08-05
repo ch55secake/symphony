@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kurrent-io/KurrentDB-Client-Go/kurrentdb"
-	"github.com/oscar/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/events"
 )
 
 // Store appends and reads one immutable KurrentDB stream per agent session.

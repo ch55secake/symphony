@@ -1,4 +1,4 @@
-module github.com/oscar/symphony
+module github.com/ch55secake/symphony
 
 go 1.25.0
 

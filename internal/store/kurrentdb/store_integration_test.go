@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/oscar/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/events"
 )
 
 func TestStoreAppendAndRead(t *testing.T) {

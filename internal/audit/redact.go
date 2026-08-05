@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/oscar/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/events"
 )
 
 const RedactedValue = "[REDACTED]"
