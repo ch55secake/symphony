@@ -8,9 +8,18 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/ch55secake/symphony/internal/events"
 	"github.com/google/uuid"
 	"github.com/kurrent-io/KurrentDB-Client-Go/kurrentdb"
-	"github.com/ch55secake/symphony/internal/events"
+)
+
+const readBatchSize = 4096
+
+var (
+	// ErrRevisionConflict reports that the stream was not at the expected revision.
+	ErrRevisionConflict = errors.New("stream revision conflict")
+	// ErrSessionNotFound reports that a session stream does not exist.
+	ErrSessionNotFound = errors.New("session not found")
 )
 
 // Store appends and reads one immutable KurrentDB stream per agent session.
@@ -69,6 +78,9 @@ func (s *Store) Append(ctx context.Context, event events.Event, expectedRevision
 		Data:        encoded,
 	})
 	if err != nil {
+		if isRevisionConflict(err) {
+			return 0, fmt.Errorf("append event: %w: %w", ErrRevisionConflict, err)
+		}
 		return 0, fmt.Errorf("append event: %w", err)
 	}
 	return event.Sequence, nil
@@ -76,32 +88,42 @@ func (s *Store) Append(ctx context.Context, event events.Event, expectedRevision
 
 // Read returns all events in durable stream order and verifies their envelopes.
 func (s *Store) Read(ctx context.Context, sessionID uuid.UUID) ([]events.Event, error) {
-	stream, err := s.client.ReadStream(ctx, StreamName(sessionID), kurrentdb.ReadStreamOptions{
-		Direction: kurrentdb.Forwards,
-		From:      kurrentdb.Start{},
-	}, 4096)
-	if err != nil {
-		return nil, fmt.Errorf("read session stream: %w", err)
-	}
-	defer stream.Close()
-
 	result := make([]events.Event, 0)
+	from := kurrentdb.StreamPosition(kurrentdb.Start{})
 	for {
-		resolved, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
+		stream, err := s.client.ReadStream(ctx, StreamName(sessionID), kurrentdb.ReadStreamOptions{
+			Direction: kurrentdb.Forwards,
+			From:      from,
+		}, readBatchSize)
+		if err != nil {
+			return nil, readError(sessionID, err)
+		}
+
+		count := 0
+		var lastRevision uint64
+		for {
+			resolved, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				stream.Close()
+				return nil, readError(sessionID, err)
+			}
+			event, err := decode(*resolved, sessionID)
+			if err != nil {
+				stream.Close()
+				return nil, err
+			}
+			result = append(result, event)
+			count++
+			lastRevision = resolved.OriginalEvent().EventNumber
+		}
+		stream.Close()
+		if count < readBatchSize {
 			return result, nil
 		}
-		if err != nil {
-			return nil, fmt.Errorf("receive session event: %w", err)
-		}
-		event, err := decode(*resolved)
-		if err != nil {
-			return nil, err
-		}
-		if event.SessionID != sessionID {
-			return nil, fmt.Errorf("stream %q contains event for another session", StreamName(sessionID))
-		}
-		result = append(result, event)
+		from = kurrentdb.Revision(lastRevision + 1)
 	}
 }
 
@@ -110,21 +132,23 @@ func (s *Store) Subscribe(ctx context.Context, sessionID uuid.UUID) (<-chan even
 	out := make(chan events.Event)
 	errs := make(chan error, 1)
 
+	subscription, err := s.client.SubscribeToStream(ctx, StreamName(sessionID), kurrentdb.SubscribeToStreamOptions{From: kurrentdb.End{}})
+	if err != nil {
+		sendError(ctx, errs, fmt.Errorf("subscribe to session stream: %w", err))
+		close(out)
+		close(errs)
+		return out, errs
+	}
+
 	go func() {
 		defer close(out)
 		defer close(errs)
-
-		subscription, err := s.client.SubscribeToStream(ctx, StreamName(sessionID), kurrentdb.SubscribeToStreamOptions{From: kurrentdb.End{}})
-		if err != nil {
-			sendError(ctx, errs, fmt.Errorf("subscribe to session stream: %w", err))
-			return
-		}
-		defer subscription.Close()
+		defer func() { _ = subscription.Close() }()
 
 		for {
 			notification := subscription.Recv()
 			if notification.EventAppeared != nil {
-				event, err := decode(*notification.EventAppeared)
+				event, err := decode(*notification.EventAppeared, sessionID)
 				if err != nil {
 					sendError(ctx, errs, err)
 					return
@@ -136,7 +160,7 @@ func (s *Store) Subscribe(ctx context.Context, sessionID uuid.UUID) (<-chan even
 				}
 			}
 			if notification.SubscriptionDropped != nil {
-				if notification.SubscriptionDropped.Error != nil && !errors.Is(notification.SubscriptionDropped.Error, context.Canceled) {
+				if notification.SubscriptionDropped.Error != nil && ctx.Err() == nil && !errors.Is(notification.SubscriptionDropped.Error, context.Canceled) {
 					sendError(ctx, errs, fmt.Errorf("session subscription dropped: %w", notification.SubscriptionDropped.Error))
 				}
 				return
@@ -147,11 +171,14 @@ func (s *Store) Subscribe(ctx context.Context, sessionID uuid.UUID) (<-chan even
 	return out, errs
 }
 
-func decode(resolved kurrentdb.ResolvedEvent) (events.Event, error) {
+func decode(resolved kurrentdb.ResolvedEvent, sessionID uuid.UUID) (events.Event, error) {
 	recorded := resolved.OriginalEvent()
 	var event events.Event
 	if err := json.Unmarshal(recorded.Data, &event); err != nil {
 		return events.Event{}, fmt.Errorf("decode event %s: %w", recorded.EventID, err)
+	}
+	if event.SessionID != sessionID {
+		return events.Event{}, fmt.Errorf("stream %q contains event for another session", StreamName(sessionID))
 	}
 	if event.Sequence != recorded.EventNumber {
 		return events.Event{}, fmt.Errorf("event %s sequence %d does not match stream revision %d", event.ID, event.Sequence, recorded.EventNumber)
@@ -160,6 +187,19 @@ func decode(resolved kurrentdb.ResolvedEvent) (events.Event, error) {
 		return events.Event{}, fmt.Errorf("validate stored event %s: %w", event.ID, err)
 	}
 	return event, nil
+}
+
+func isRevisionConflict(err error) bool {
+	var kurrentError *kurrentdb.Error
+	return errors.As(err, &kurrentError) && (kurrentError.IsErrorCode(kurrentdb.ErrorCodeWrongExpectedVersion) || kurrentError.IsErrorCode(kurrentdb.ErrorCodeStreamRevisionConflict))
+}
+
+func readError(sessionID uuid.UUID, err error) error {
+	var kurrentError *kurrentdb.Error
+	if errors.As(err, &kurrentError) && kurrentError.IsErrorCode(kurrentdb.ErrorCodeResourceNotFound) {
+		return fmt.Errorf("%w: %s: %w", ErrSessionNotFound, sessionID, err)
+	}
+	return fmt.Errorf("read session stream: %w", err)
 }
 
 func sendError(ctx context.Context, errs chan<- error, err error) {

@@ -20,10 +20,10 @@ was omitted without leaking it.
 
 ## Local Development
 
-Start KurrentDB:
+Start KurrentDB and wait for its health check:
 
 ```sh
-docker compose up -d
+docker compose up -d --wait
 ```
 
 The insecure local database accepts this connection string:

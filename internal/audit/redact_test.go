@@ -30,3 +30,29 @@ func TestDefaultPolicyRedactsNestedSecrets(t *testing.T) {
 		t.Fatalf("message = %q, want safe value", got)
 	}
 }
+
+func TestDefaultPolicyRedactsSensitiveValuesInArrays(t *testing.T) {
+	t.Parallel()
+	payload, redactions, err := DefaultPolicy().Redact(map[string]any{
+		"messages": []any{
+			map[string]any{"note": "Bearer abc.def"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Redact() error = %v", err)
+	}
+	if len(redactions) != 1 || redactions[0].Path != "$.messages[0].note" {
+		t.Fatalf("redactions = %#v, want array value redaction", redactions)
+	}
+	var decoded struct {
+		Messages []struct {
+			Note string `json:"note"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := decoded.Messages[0].Note; got != RedactedValue {
+		t.Fatalf("note = %q, want %q", got, RedactedValue)
+	}
+}
