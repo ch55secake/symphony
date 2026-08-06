@@ -13,6 +13,7 @@ This first increment provides a Go library for durable session event streams:
 - Optimistic-concurrency appends
 - Stream reads and live subscriptions
 - Persistence-time JSON redaction for common secret fields and Bearer tokens
+- Session lifecycle service that owns ordered start, finish, and failure events
 
 Redacted values are deliberately not recoverable. Their event retains the field path,
 redaction reason, and hash of the resulting safe payload so replay can show that data
@@ -43,3 +44,10 @@ Run the KurrentDB integration test after the container is healthy:
 ```sh
 KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' go test ./internal/store/kurrentdb
 ```
+
+## Session Lifecycle
+
+`internal/session` creates a session stream and owns its revision for lifecycle
+writes. It records `session.started` before subsequent runtime work and appends one
+terminal `session.finished` or `session.failed` event with correlation and causation
+metadata. Payloads pass through the audit policy before they are persisted.
