@@ -4,6 +4,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,11 +17,13 @@ import (
 
 	"github.com/ch55secake/symphony/internal/agent"
 	"github.com/ch55secake/symphony/internal/audit"
+	"github.com/ch55secake/symphony/internal/events"
 	"github.com/ch55secake/symphony/internal/providers/anthropic"
 	"github.com/ch55secake/symphony/internal/providers/openai"
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/store/kurrentdb"
 	"github.com/ch55secake/symphony/internal/workspace"
+	"github.com/google/uuid"
 )
 
 const actor = "cli"
@@ -42,12 +45,33 @@ type runtime struct {
 
 type runtimeFactory func(config) (*runtime, error)
 
+type replayReader interface {
+	Read(context.Context, uuid.UUID) ([]events.Event, error)
+	Close() error
+}
+
+type replayFactory func(string) (replayReader, error)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, newRuntime); err != nil {
+	if err := execute(ctx, os.Args[1:], os.Stdin, os.Stdout, newRuntime, newReplayReader); err != nil {
 		fmt.Fprintln(os.Stderr, "symphony:", err)
 		os.Exit(1)
+	}
+}
+
+func execute(ctx context.Context, args []string, input io.Reader, output io.Writer, factory runtimeFactory, replayFactory replayFactory) error {
+	if len(args) == 0 {
+		return errors.New("usage: symphony run|replay")
+	}
+	switch args[0] {
+	case "run":
+		return run(ctx, args, input, output, factory)
+	case "replay":
+		return replay(ctx, args[1:], output, replayFactory)
+	default:
+		return errors.New("usage: symphony run|replay")
 	}
 }
 
@@ -64,6 +88,10 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer, 
 
 	handle, err := runtime.sessions.Start(ctx, actor, config.workspace)
 	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "Session: %s\n", handle.SessionID); err != nil {
+		_ = runtime.sessions.Fail(context.WithoutCancel(ctx), handle, actor, "output_failed")
 		return err
 	}
 	result, err := runtime.loop.RunWithApproval(ctx, handle, actor, runtime.provider, agent.CompletionRequest{
@@ -96,6 +124,36 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer, 
 	}
 	_, err = fmt.Fprintln(output, result.Completion.Content)
 	return err
+}
+
+func replay(ctx context.Context, args []string, output io.Writer, factory replayFactory) error {
+	if len(args) != 1 {
+		return errors.New("usage: symphony replay SESSION_ID")
+	}
+	sessionID, err := uuid.Parse(args[0])
+	if err != nil {
+		return errors.New("session ID must be a UUID")
+	}
+	connectionString := os.Getenv("KURRENTDB_URL")
+	if connectionString == "" {
+		return errors.New("KURRENTDB_URL is required")
+	}
+	reader, err := factory(connectionString)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	recorded, err := reader.Read(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(output)
+	for _, event := range recorded {
+		if err := encoder.Encode(event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func parseConfig(args []string) (config, error) {
@@ -204,6 +262,10 @@ func newRuntime(config config) (*runtime, error) {
 		tools:    []agent.ToolDefinition{readTool.Definition(), writeTool.Definition(), commandTool.Definition()},
 		close:    store.Close,
 	}, nil
+}
+
+func newReplayReader(connectionString string) (replayReader, error) {
+	return kurrentdb.New(connectionString)
 }
 
 func newProvider(name string) (agent.Provider, error) {

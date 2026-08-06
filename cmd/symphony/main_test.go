@@ -14,6 +14,7 @@ import (
 	"github.com/ch55secake/symphony/internal/events"
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/workspace"
+	"github.com/google/uuid"
 )
 
 type memoryStore struct {
@@ -29,6 +30,23 @@ func (s *memoryStore) Append(_ context.Context, event events.Event, _ *uint64) (
 type fakeProvider struct {
 	completions []agent.Completion
 	err         error
+}
+
+type fakeReplayReader struct {
+	events    []events.Event
+	err       error
+	sessionID uuid.UUID
+	closed    bool
+}
+
+func (r *fakeReplayReader) Read(_ context.Context, sessionID uuid.UUID) ([]events.Event, error) {
+	r.sessionID = sessionID
+	return r.events, r.err
+}
+
+func (r *fakeReplayReader) Close() error {
+	r.closed = true
+	return nil
 }
 
 func (p *fakeProvider) Name() string { return "fake" }
@@ -63,7 +81,7 @@ func TestRunCompletesReadOnlySession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	if output.String() != "read complete\n" || store.events[len(store.events)-1].Type != events.SessionFinished {
+	if !strings.Contains(output.String(), "Session: ") || !strings.HasSuffix(output.String(), "read complete\n") || store.events[len(store.events)-1].Type != events.SessionFinished {
 		t.Fatalf("output = %q, events = %#v", output.String(), store.events)
 	}
 	encoded, err := json.Marshal(store.events)
@@ -72,6 +90,60 @@ func TestRunCompletesReadOnlySession(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "private content") {
 		t.Fatal("persisted events contain raw file content")
+	}
+}
+
+func TestReplayWritesEventsInOrderWithoutSessionWrites(t *testing.T) {
+	sessionID := uuid.New()
+	first, err := events.New(sessionID, events.SessionStarted, "cli", uuid.New(), events.SessionStartedPayload{Workspace: "/workspace"}, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	second, err := events.New(sessionID, events.SessionFinished, "cli", uuid.New(), events.SessionFinishedPayload{Reason: "completed"}, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	reader := &fakeReplayReader{events: []events.Event{first, second}}
+	var output strings.Builder
+	t.Setenv("KURRENTDB_URL", "kurrentdb://localhost:2113?tls=false")
+	err = replay(context.Background(), []string{sessionID.String()}, &output, func(connectionString string) (replayReader, error) {
+		if connectionString != "kurrentdb://localhost:2113?tls=false" {
+			t.Fatalf("connection string = %q", connectionString)
+		}
+		return reader, nil
+	})
+	if err != nil || reader.sessionID != sessionID || !reader.closed {
+		t.Fatalf("replay() error = %v, reader = %#v", err, reader)
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("output = %q, want two JSONL events", output.String())
+	}
+	var replayed []events.Event
+	for _, line := range lines {
+		var event events.Event
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("unmarshal replay event: %v", err)
+		}
+		replayed = append(replayed, event)
+	}
+	if replayed[0].ID != first.ID || replayed[1].ID != second.ID {
+		t.Fatalf("replayed events = %#v, want original order", replayed)
+	}
+}
+
+func TestReplayValidatesArgumentsAndReadFailures(t *testing.T) {
+	t.Setenv("KURRENTDB_URL", "kurrentdb://localhost:2113?tls=false")
+	if err := replay(context.Background(), nil, ioDiscard{}, func(string) (replayReader, error) { return nil, nil }); err == nil {
+		t.Fatal("replay() error = nil, want usage error")
+	}
+	if err := replay(context.Background(), []string{"invalid"}, ioDiscard{}, func(string) (replayReader, error) { return nil, nil }); err == nil {
+		t.Fatal("replay() error = nil, want UUID error")
+	}
+	reader := &fakeReplayReader{err: errors.New("read failed")}
+	err := replay(context.Background(), []string{uuid.New().String()}, ioDiscard{}, func(string) (replayReader, error) { return reader, nil })
+	if err == nil || !reader.closed {
+		t.Fatalf("replay() error = %v, reader = %#v", err, reader)
 	}
 }
 

@@ -125,3 +125,13 @@ KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENAI_API_KEY='...' \
 Anthropic uses `ANTHROPIC_API_KEY` and `--provider anthropic`. The runner prints the final
 completion. Write and command requests stop at a terminal prompt showing only safe action
 metadata and a hash; enter `y` or `yes` to approve, or any other input to deny.
+
+## Session Replay
+
+Each run prints its session ID. Replay that session's recorded audit timeline as JSON Lines
+without invoking a provider or repeating side effects:
+
+```sh
+KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' \
+  go run ./cmd/symphony replay SESSION_ID
+```
