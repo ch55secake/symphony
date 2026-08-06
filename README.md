@@ -72,3 +72,9 @@ Commands use the same durable request and approval flow. They accept an executab
 argument list, never an implicit shell string, and may only use a workspace-relative
 working directory. Runtime stdout and stderr are bounded and returned to the caller;
 events retain only output hashes, byte counts, truncation state, exit code, and duration.
+
+## Agent Turns
+
+`internal/agent` persists user messages and model-request intent before contacting a
+provider, then persists the model completion or failure. It exposes a provider-neutral
+completion contract so OpenAI and Anthropic adapters can share the same audited turn path.

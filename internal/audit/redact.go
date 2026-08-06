@@ -21,7 +21,7 @@ type Policy struct {
 func DefaultPolicy() Policy {
 	return Policy{
 		KeyPatterns: []*regexp.Regexp{
-			regexp.MustCompile(`(?i)(api[_-]?key|authorization|password|secret|token|credential)`),
+			regexp.MustCompile(`(?i)(?:^|[_-])(api[_-]?key|authorization|password|secret|token|credential)(?:$|[_-])`),
 		},
 		ValuePatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)bearer\s+[a-z0-9._-]+`),

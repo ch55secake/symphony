@@ -80,3 +80,23 @@ func TestDefaultPolicyRedactsSecretCommandArguments(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultPolicyPreservesTokenUsageMetadata(t *testing.T) {
+	t.Parallel()
+	payload, redactions, err := DefaultPolicy().Redact(map[string]any{"input_tokens": 42})
+	if err != nil {
+		t.Fatalf("Redact() error = %v", err)
+	}
+	if len(redactions) != 0 {
+		t.Fatalf("redactions = %#v, want none", redactions)
+	}
+	var decoded struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if decoded.InputTokens != 42 {
+		t.Fatalf("input tokens = %d, want 42", decoded.InputTokens)
+	}
+}

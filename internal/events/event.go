@@ -31,6 +31,10 @@ const (
 	CommandApproved    Type = "command.approved"
 	CommandCompleted   Type = "command.completed"
 	CommandFailed      Type = "command.failed"
+	UserMessage        Type = "user.message"
+	ModelRequested     Type = "model.requested"
+	ModelCompleted     Type = "model.completed"
+	ModelFailed        Type = "model.failed"
 	PolicyRedacted     Type = "policy.redacted"
 )
 
