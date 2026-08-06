@@ -85,3 +85,9 @@ completion contract so OpenAI and Anthropic adapters can share the same audited 
 its `Config.APIKey` from `OPENAI_API_KEY` at process composition time; the provider sends
 `store: false` so OpenAI does not become an additional conversation store. API keys and
 response error bodies are never persisted by Symphony.
+
+## Anthropic Provider
+
+`internal/providers/anthropic` implements the non-streaming Anthropic Messages API.
+Configure its `Config.APIKey` from `ANTHROPIC_API_KEY` at process composition time. API
+keys and Anthropic response error bodies are never persisted by Symphony.
