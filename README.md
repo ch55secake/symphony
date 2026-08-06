@@ -106,3 +106,9 @@ The `write_file` tool pauses `agent.Loop` after persisting a write request and g
 approval request. Callers must explicitly approve or deny the returned pending action;
 approval executes the hash-bound write and resumes the provider loop, while denial resumes
 with an error tool result and performs no filesystem mutation.
+
+## Command Approval Bridge
+
+The `run_command` tool likewise pauses `agent.Loop` after recording a structured command
+request and generic approval request. Approval runs the hash-bound command and provides its
+bounded output only to the resumed provider loop; command output is never persisted.

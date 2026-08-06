@@ -151,3 +151,59 @@ func TestLoopPersistsApprovedWriteSequence(t *testing.T) {
 		t.Fatalf("persisted events = %#v, want complete approved write sequence", persisted)
 	}
 }
+
+func TestLoopPersistsApprovedCommandSequence(t *testing.T) {
+	connectionString := os.Getenv("KURRENTDB_URL")
+	if connectionString == "" {
+		t.Skip("KURRENTDB_URL is not set")
+	}
+	store, err := kurrentdb.New(connectionString)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	root := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	sessions := session.New(store, audit.DefaultPolicy())
+	handle, err := sessions.Start(ctx, "user", root)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	turns, err := agent.New(sessions)
+	if err != nil {
+		t.Fatalf("agent.New() error = %v", err)
+	}
+	workspaceService, err := workspace.New(sessions, root)
+	if err != nil {
+		t.Fatalf("workspace.New() error = %v", err)
+	}
+	commandTool, err := agent.NewRunCommandTool(workspaceService)
+	if err != nil {
+		t.Fatalf("NewRunCommandTool() error = %v", err)
+	}
+	loop, err := agent.NewLoop(turns, []agent.Tool{commandTool}, 1)
+	if err != nil {
+		t.Fatalf("NewLoop() error = %v", err)
+	}
+	provider := &loopProvider{completions: []agent.Completion{
+		{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "run_command", Arguments: json.RawMessage(`{"executable":"sh","arguments":["-c","printf content"]}`)}}, StopReason: "tool_use"},
+		{Content: "done", StopReason: "stop"},
+	}}
+	paused, err := loop.RunWithApproval(ctx, handle, "user", provider, agent.CompletionRequest{Model: "test-model", Messages: []agent.Message{{Role: agent.RoleUser, Content: "Run command"}}})
+	if err != nil || paused.Pending == nil {
+		t.Fatalf("RunWithApproval() result = %#v, error = %v", paused, err)
+	}
+	if _, err := loop.Approve(ctx, handle, "user", provider, paused.Pending); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+
+	persisted, err := store.Read(ctx, handle.SessionID)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(persisted) != 12 || persisted[4].Type != events.CommandRequested || persisted[5].Type != events.ApprovalRequested || persisted[6].Type != events.ApprovalGranted || persisted[8].Type != events.CommandCompleted || persisted[9].Type != events.ToolResult {
+		t.Fatalf("persisted events = %#v, want complete approved command sequence", persisted)
+	}
+}

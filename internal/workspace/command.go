@@ -48,6 +48,11 @@ type CommandRequest struct {
 	pending     *commandOutcome
 }
 
+// Hash returns the hash binding approval and execution to this command request.
+func (r *CommandRequest) Hash() string {
+	return r.commandHash
+}
+
 // CommandResult returns bounded process output to the runtime without persistence.
 type CommandResult struct {
 	Stdout    []byte

@@ -385,6 +385,86 @@ func (t *WriteFileTool) RequestApproval(ctx context.Context, handle *session.Han
 	}, nil
 }
 
+// RunCommandTool stages a structured workspace command for explicit operator approval.
+type RunCommandTool struct {
+	workspace *workspace.Service
+}
+
+func NewRunCommandTool(workspaceService *workspace.Service) (*RunCommandTool, error) {
+	if workspaceService == nil {
+		return nil, fmt.Errorf("workspace service is required")
+	}
+	return &RunCommandTool{workspace: workspaceService}, nil
+}
+
+func (t *RunCommandTool) Definition() ToolDefinition {
+	return ToolDefinition{
+		Name:        "run_command",
+		Description: "Run a structured workspace command after operator approval.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"executable":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}},"working_directory":{"type":"string"}},"required":["executable","arguments"],"additionalProperties":false}`),
+	}
+}
+
+// Execute is unreachable during normal loop operation because commands always pause first.
+func (t *RunCommandTool) Execute(_ context.Context, _ *session.Handle, _ string, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{}, ErrApprovalPending
+}
+
+func (t *RunCommandTool) RequestApproval(ctx context.Context, handle *session.Handle, actor string, arguments json.RawMessage) (*PendingApproval, error) {
+	var input struct {
+		Executable       string   `json:"executable"`
+		Arguments        []string `json:"arguments"`
+		WorkingDirectory string   `json:"working_directory"`
+	}
+	if err := json.Unmarshal(arguments, &input); err != nil || input.Executable == "" || input.Arguments == nil {
+		return nil, errors.New("invalid run_command arguments")
+	}
+	command := workspace.Command{
+		Executable:       input.Executable,
+		Arguments:        input.Arguments,
+		WorkingDirectory: input.WorkingDirectory,
+	}
+	request, err := t.workspace.RequestCommand(ctx, handle, actor, command)
+	if err != nil {
+		return nil, err
+	}
+	return &PendingApproval{
+		OperationID: request.OperationID.String(),
+		Action:      "run_command",
+		Summary:     fmt.Sprintf("run %s (%d arguments)", command.Executable, len(command.Arguments)),
+		Hash:        request.Hash(),
+		approve: func(ctx context.Context, handle *session.Handle, actor string) (ToolResult, error) {
+			if err := t.workspace.ApproveCommand(ctx, handle, actor, request); err != nil {
+				return ToolResult{}, err
+			}
+			result, err := t.workspace.ExecuteCommand(ctx, handle, actor, request, command)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return commandToolResult(result), nil
+		},
+	}, nil
+}
+
+func commandToolResult(result workspace.CommandResult) ToolResult {
+	content := string(result.Stdout)
+	if len(result.Stderr) > 0 {
+		if content != "" {
+			content += "\n"
+		}
+		content += string(result.Stderr)
+	}
+	if content == "" {
+		content = fmt.Sprintf("command completed with exit code %d", result.ExitCode)
+	}
+	return ToolResult{
+		Content:   content,
+		Bytes:     len(result.Stdout) + len(result.Stderr),
+		Hash:      events.Hash([]byte(content)),
+		Truncated: result.Truncated,
+	}
+}
+
 func failedToolResult(call events.ModelToolCall, content string) ToolResult {
 	return ToolResult{
 		CallID:  call.ID,
