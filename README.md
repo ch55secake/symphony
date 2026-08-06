@@ -112,3 +112,16 @@ with an error tool result and performs no filesystem mutation.
 The `run_command` tool likewise pauses `agent.Loop` after recording a structured command
 request and generic approval request. Approval runs the hash-bound command and provides its
 bounded output only to the resumed provider loop; command output is never persisted.
+
+## CLI Runner
+
+Run an audited agent session with one provider credential in the environment:
+
+```sh
+KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENAI_API_KEY='...' \
+  go run ./cmd/symphony run --provider openai --model gpt-5.2 --workspace . "Read README.md"
+```
+
+Anthropic uses `ANTHROPIC_API_KEY` and `--provider anthropic`. The runner prints the final
+completion. Write and command requests stop at a terminal prompt showing only safe action
+metadata and a hash; enter `y` or `yes` to approve, or any other input to deny.

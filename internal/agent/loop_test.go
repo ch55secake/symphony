@@ -335,7 +335,7 @@ func TestRunCommandToolPausesThenApprovesAndResumes(t *testing.T) {
 	if err != nil || resumed.Completion == nil || resumed.Completion.Content != "command complete" {
 		t.Fatalf("Approve() result = %#v, error = %v", resumed, err)
 	}
-	if len(provider.calls) != 2 || provider.calls[1].Messages[2].ToolResults[0].Content != "command-output" {
+	if len(provider.calls) != 2 || provider.calls[1].Messages[2].ToolResults[0].CallID != "call-1" || provider.calls[1].Messages[2].ToolResults[0].Name != "run_command" || provider.calls[1].Messages[2].ToolResults[0].Content != "command-output" {
 		t.Fatalf("follow-up = %#v, want command output tool result", provider.calls)
 	}
 	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.CommandApproved || store.events[8].Type != events.CommandCompleted || store.events[9].Type != events.ToolResult {

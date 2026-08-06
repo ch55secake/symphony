@@ -122,6 +122,8 @@ func (l *Loop) Approve(ctx context.Context, handle *session.Handle, actor string
 	if err != nil {
 		return LoopResult{}, fmt.Errorf("execute approved action: %w", err)
 	}
+	result.CallID = pending.ToolCallID
+	result.Name = pending.Action
 	if err := l.turns.RecordToolResult(ctx, handle, pending.Action, result); err != nil {
 		return LoopResult{}, fmt.Errorf("record approved tool result: %w", err)
 	}
