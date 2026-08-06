@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/ch55secake/symphony/internal/audit"
@@ -90,5 +91,53 @@ func TestTerminalEventsCanOnlyBeAppendedOnce(t *testing.T) {
 	}
 	if len(store.events) != 2 {
 		t.Fatalf("events = %d, want 2", len(store.events))
+	}
+}
+
+func TestConcurrentTerminalEventsSerializeHandleState(t *testing.T) {
+	t.Parallel()
+	store := &recordingStore{}
+	service := New(store, audit.DefaultPolicy())
+	handle, err := service.Start(context.Background(), "user", "/workspace")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var group sync.WaitGroup
+	for _, closeSession := range []func() error{
+		func() error {
+			<-start
+			return service.Finish(context.Background(), handle, "agent", "completed")
+		},
+		func() error {
+			<-start
+			return service.Fail(context.Background(), handle, "agent", "failed")
+		},
+	} {
+		group.Go(func() {
+			errs <- closeSession()
+		})
+	}
+	close(start)
+	group.Wait()
+	close(errs)
+
+	succeeded := 0
+	for err := range errs {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("terminal event error = %v, want ErrClosed", err)
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("successful terminal events = %d, want 1", succeeded)
+	}
+	if len(store.events) != 2 {
+		t.Fatalf("events = %d, want start plus one terminal event", len(store.events))
 	}
 }

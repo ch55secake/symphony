@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/ch55secake/symphony/internal/audit"
 	"github.com/ch55secake/symphony/internal/events"
@@ -27,6 +28,7 @@ type Service struct {
 
 // Handle carries the ordered write state for one session.
 type Handle struct {
+	mu            sync.Mutex
 	SessionID     uuid.UUID
 	CorrelationID uuid.UUID
 	Revision      uint64
@@ -68,6 +70,8 @@ func (s *Service) close(ctx context.Context, handle *Handle, eventType events.Ty
 	if handle == nil {
 		return fmt.Errorf("session handle is required")
 	}
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
 	if handle.closed {
 		return ErrClosed
 	}
