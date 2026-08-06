@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ch55secake/symphony/internal/agent"
+	"github.com/ch55secake/symphony/internal/events"
 )
 
 func TestCompleteMapsMessagesAndToolUse(t *testing.T) {
@@ -127,5 +128,23 @@ func TestNewRequiresAPIKeyAndDefaultsMaxTokens(t *testing.T) {
 	}
 	if provider.maxTokens != defaultMaxTokens {
 		t.Fatalf("max tokens = %d, want %d", provider.maxTokens, defaultMaxTokens)
+	}
+}
+
+func TestRequestMapsToolResults(t *testing.T) {
+	t.Parallel()
+	request, err := toRequest(agent.CompletionRequest{Model: "claude-test", Messages: []agent.Message{
+		{Role: agent.RoleAssistant, ToolCalls: []events.ModelToolCall{{ID: "toolu_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"note.txt"}`)}}},
+		{Role: agent.RoleUser, ToolResults: []agent.ToolResult{{CallID: "toolu_1", Name: "read_file", Content: "contents"}}},
+	}}, defaultMaxTokens)
+	if err != nil {
+		t.Fatalf("toRequest() error = %v", err)
+	}
+	encoded, err := json.Marshal(request.Messages)
+	if err != nil {
+		t.Fatalf("marshal messages: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"type":"tool_use"`) || !strings.Contains(string(encoded), `"type":"tool_result"`) || !strings.Contains(string(encoded), `"tool_use_id":"toolu_1"`) {
+		t.Fatalf("messages = %s, want tool use and result", encoded)
 	}
 }

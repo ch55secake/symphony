@@ -112,7 +112,26 @@ type messagesRequest struct {
 
 type message struct {
 	Role    agent.Role `json:"role"`
-	Content string     `json:"content"`
+	Content any        `json:"content"`
+}
+
+type textBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type toolUseBlock struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+type toolResultBlock struct {
+	Type      string `json:"type"`
+	ToolUseID string `json:"tool_use_id"`
+	Content   string `json:"content"`
+	IsError   bool   `json:"is_error,omitempty"`
 }
 
 type toolDefinition struct {
@@ -129,7 +148,7 @@ func toRequest(request agent.CompletionRequest, maxTokens int) (messagesRequest,
 		case agent.RoleSystem:
 			system = append(system, item.Content)
 		case agent.RoleUser, agent.RoleAssistant:
-			messages = append(messages, message{Role: item.Role, Content: item.Content})
+			messages = append(messages, message{Role: item.Role, Content: messageContent(item)})
 		default:
 			return messagesRequest{}, fmt.Errorf("unsupported Anthropic message role %q", item.Role)
 		}
@@ -148,6 +167,23 @@ func toRequest(request agent.CompletionRequest, maxTokens int) (messagesRequest,
 		Messages:  messages,
 		Tools:     tools,
 	}, nil
+}
+
+func messageContent(message agent.Message) any {
+	if len(message.ToolCalls) == 0 && len(message.ToolResults) == 0 {
+		return message.Content
+	}
+	blocks := make([]any, 0, 1+len(message.ToolCalls)+len(message.ToolResults))
+	if message.Content != "" {
+		blocks = append(blocks, textBlock{Type: "text", Text: message.Content})
+	}
+	for _, call := range message.ToolCalls {
+		blocks = append(blocks, toolUseBlock{Type: "tool_use", ID: call.ID, Name: call.Name, Input: call.Arguments})
+	}
+	for _, result := range message.ToolResults {
+		blocks = append(blocks, toolResultBlock{Type: "tool_result", ToolUseID: result.CallID, Content: result.Content, IsError: result.IsError})
+	}
+	return blocks
 }
 
 type messagesResponse struct {

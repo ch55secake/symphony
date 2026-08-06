@@ -40,3 +40,13 @@ type ModelFailedPayload struct {
 	Model    string `json:"model"`
 	Code     string `json:"code"`
 }
+
+// ToolResultPayload records a model tool result before it is sent to a provider.
+type ToolResultPayload struct {
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	IsError   bool   `json:"is_error"`
+	Bytes     int    `json:"bytes"`
+	Hash      string `json:"hash"`
+	Truncated bool   `json:"truncated"`
+}

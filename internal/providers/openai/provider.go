@@ -89,7 +89,7 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 
 type responsesRequest struct {
 	Model string         `json:"model"`
-	Input []inputMessage `json:"input"`
+	Input []any          `json:"input"`
 	Tools []functionTool `json:"tools,omitempty"`
 	Store bool           `json:"store"`
 }
@@ -107,10 +107,31 @@ type functionTool struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
+type functionCallInput struct {
+	Type      string `json:"type"`
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type functionCallOutputInput struct {
+	Type   string `json:"type"`
+	CallID string `json:"call_id"`
+	Output string `json:"output"`
+}
+
 func toRequest(request agent.CompletionRequest) responsesRequest {
-	input := make([]inputMessage, 0, len(request.Messages))
+	input := make([]any, 0, len(request.Messages))
 	for _, message := range request.Messages {
-		input = append(input, inputMessage{Type: "message", Role: message.Role, Content: message.Content})
+		if message.Content != "" || (len(message.ToolCalls) == 0 && len(message.ToolResults) == 0) {
+			input = append(input, inputMessage{Type: "message", Role: message.Role, Content: message.Content})
+		}
+		for _, call := range message.ToolCalls {
+			input = append(input, functionCallInput{Type: "function_call", CallID: call.ID, Name: call.Name, Arguments: string(call.Arguments)})
+		}
+		for _, result := range message.ToolResults {
+			input = append(input, functionCallOutputInput{Type: "function_call_output", CallID: result.CallID, Output: result.Content})
+		}
 	}
 	tools := make([]functionTool, 0, len(request.Tools))
 	for _, tool := range request.Tools {

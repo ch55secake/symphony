@@ -91,3 +91,11 @@ response error bodies are never persisted by Symphony.
 `internal/providers/anthropic` implements the non-streaming Anthropic Messages API.
 Configure its `Config.APIKey` from `ANTHROPIC_API_KEY` at process composition time. API
 keys and Anthropic response error bodies are never persisted by Symphony.
+
+
+## Read-Only Tool Loop
+
+`internal/agent.Loop` follows provider tool calls with the native `read_file` tool.
+It persists metadata-only tool results before each follow-up provider request, forwards
+bounded file content only in memory, and stops on unknown tools, tool failures, provider
+errors, cancellation, or its configured tool-round limit.

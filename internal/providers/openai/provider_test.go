@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ch55secake/symphony/internal/agent"
+	"github.com/ch55secake/symphony/internal/events"
 )
 
 func TestCompleteMapsResponseAndDisablesOpenAIStorage(t *testing.T) {
@@ -116,5 +117,20 @@ func TestNewRequiresAPIKey(t *testing.T) {
 	t.Parallel()
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("New() error = nil, want missing API key error")
+	}
+}
+
+func TestRequestMapsToolResults(t *testing.T) {
+	t.Parallel()
+	request := toRequest(agent.CompletionRequest{Messages: []agent.Message{
+		{Role: agent.RoleAssistant, ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "read_file", Arguments: json.RawMessage(`{"path":"note.txt"}`)}}},
+		{Role: agent.RoleUser, ToolResults: []agent.ToolResult{{CallID: "call-1", Name: "read_file", Content: "contents"}}},
+	}})
+	encoded, err := json.Marshal(request.Input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"type":"function_call"`) || !strings.Contains(string(encoded), `"type":"function_call_output"`) || !strings.Contains(string(encoded), `"call_id":"call-1"`) {
+		t.Fatalf("input = %s, want function call and result", encoded)
 	}
 }

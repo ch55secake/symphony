@@ -22,8 +22,21 @@ const (
 
 // Message is provider-neutral conversation content.
 type Message struct {
-	Role    Role   `json:"role"`
-	Content string `json:"content"`
+	Role        Role                   `json:"role"`
+	Content     string                 `json:"content,omitempty"`
+	ToolCalls   []events.ModelToolCall `json:"tool_calls,omitempty"`
+	ToolResults []ToolResult           `json:"tool_results,omitempty"`
+}
+
+// ToolResult is the bounded output returned to a model after a tool execution.
+type ToolResult struct {
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Content   string `json:"content"`
+	IsError   bool   `json:"is_error"`
+	Bytes     int    `json:"bytes"`
+	Hash      string `json:"hash"`
+	Truncated bool   `json:"truncated"`
 }
 
 // ToolDefinition describes a callable tool exposed to a model.
@@ -69,6 +82,15 @@ func New(sessions *session.Service) (*Service, error) {
 
 // Run records user input, model intent, and the provider outcome for one turn.
 func (s *Service) Run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest) (Completion, error) {
+	return s.run(ctx, handle, actor, provider, request, true)
+}
+
+// Continue records a follow-up model turn without duplicating prior user messages.
+func (s *Service) Continue(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest) (Completion, error) {
+	return s.run(ctx, handle, actor, provider, request, false)
+}
+
+func (s *Service) run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, recordUserMessages bool) (Completion, error) {
 	if provider == nil {
 		return Completion{}, fmt.Errorf("model provider is required")
 	}
@@ -78,12 +100,14 @@ func (s *Service) Run(ctx context.Context, handle *session.Handle, actor string,
 	if len(request.Messages) == 0 {
 		return Completion{}, fmt.Errorf("at least one message is required")
 	}
-	for _, message := range request.Messages {
-		if message.Role != RoleUser {
-			continue
-		}
-		if err := s.sessions.Record(ctx, handle, events.UserMessage, actor, events.UserMessagePayload{Content: message.Content}); err != nil {
-			return Completion{}, fmt.Errorf("record user message: %w", err)
+	if recordUserMessages {
+		for _, message := range request.Messages {
+			if message.Role != RoleUser || message.Content == "" {
+				continue
+			}
+			if err := s.sessions.Record(ctx, handle, events.UserMessage, actor, events.UserMessagePayload{Content: message.Content}); err != nil {
+				return Completion{}, fmt.Errorf("record user message: %w", err)
+			}
 		}
 	}
 
@@ -125,6 +149,18 @@ func (s *Service) Run(ctx context.Context, handle *session.Handle, actor string,
 		return Completion{}, fmt.Errorf("record model completion: %w", err)
 	}
 	return completion, nil
+}
+
+// RecordToolResult persists a tool result before it is included in a follow-up request.
+func (s *Service) RecordToolResult(ctx context.Context, handle *session.Handle, actor string, result ToolResult) error {
+	return s.sessions.Record(ctx, handle, events.ToolResult, actor, events.ToolResultPayload{
+		CallID:    result.CallID,
+		Name:      result.Name,
+		IsError:   result.IsError,
+		Bytes:     result.Bytes,
+		Hash:      result.Hash,
+		Truncated: result.Truncated,
+	})
 }
 
 func hashRequest(request CompletionRequest) (string, error) {
