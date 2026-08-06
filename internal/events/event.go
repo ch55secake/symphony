@@ -16,11 +16,14 @@ const SchemaVersion = 1
 type Type string
 
 const (
-	SessionStarted  Type = "session.started"
-	SessionResumed  Type = "session.resumed"
-	SessionFinished Type = "session.finished"
-	SessionFailed   Type = "session.failed"
-	PolicyRedacted  Type = "policy.redacted"
+	SessionStarted    Type = "session.started"
+	SessionResumed    Type = "session.resumed"
+	SessionFinished   Type = "session.finished"
+	SessionFailed     Type = "session.failed"
+	FileReadRequested Type = "file.read.requested"
+	FileReadCompleted Type = "file.read.completed"
+	FileReadFailed    Type = "file.read.failed"
+	PolicyRedacted    Type = "policy.redacted"
 )
 
 // Redaction identifies a field intentionally omitted from a durable event.

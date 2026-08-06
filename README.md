@@ -51,3 +51,10 @@ KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' go test ./internal/store/ku
 writes. It records `session.started` before subsequent runtime work and appends one
 terminal `session.finished` or `session.failed` event with correlation and causation
 metadata. Payloads pass through the audit policy before they are persisted.
+
+## Workspace Reads
+
+`internal/workspace` confines reads to a configured workspace root. Each read persists
+`file.read.requested` before opening the file, followed by a completion or failure event.
+Completion events contain only the path, byte count, duration, and content hash; raw file
+content is returned to the caller but is never persisted.

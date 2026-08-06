@@ -66,6 +66,19 @@ func (s *Service) Fail(ctx context.Context, handle *Handle, actor, message strin
 	return s.close(ctx, handle, events.SessionFailed, actor, events.SessionFailedPayload{Message: message})
 }
 
+// Record appends a non-terminal session event using handle's current revision.
+func (s *Service) Record(ctx context.Context, handle *Handle, eventType events.Type, actor string, payload any) error {
+	if handle == nil {
+		return fmt.Errorf("session handle is required")
+	}
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
+	if handle.closed {
+		return ErrClosed
+	}
+	return s.appendLocked(ctx, handle, eventType, actor, payload)
+}
+
 func (s *Service) close(ctx context.Context, handle *Handle, eventType events.Type, actor string, payload any) error {
 	if handle == nil {
 		return fmt.Errorf("session handle is required")
@@ -75,17 +88,25 @@ func (s *Service) close(ctx context.Context, handle *Handle, eventType events.Ty
 	if handle.closed {
 		return ErrClosed
 	}
+	if err := s.appendLocked(ctx, handle, eventType, actor, payload); err != nil {
+		return err
+	}
+	handle.closed = true
+	return nil
+}
+
+// appendLocked appends an event while handle.mu is held.
+func (s *Service) appendLocked(ctx context.Context, handle *Handle, eventType events.Type, actor string, payload any) error {
 	event, err := s.event(handle, eventType, actor, payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("create session event: %w", err)
 	}
 	revision, err := s.store.Append(ctx, event, &handle.Revision)
 	if err != nil {
-		return fmt.Errorf("append session terminal event: %w", err)
+		return fmt.Errorf("append session event: %w", err)
 	}
 	handle.Revision = revision
 	handle.lastEventID = event.ID
-	handle.closed = true
 	return nil
 }
 
