@@ -78,3 +78,10 @@ events retain only output hashes, byte counts, truncation state, exit code, and 
 `internal/agent` persists user messages and model-request intent before contacting a
 provider, then persists the model completion or failure. It exposes a provider-neutral
 completion contract so OpenAI and Anthropic adapters can share the same audited turn path.
+
+## OpenAI Provider
+
+`internal/providers/openai` implements the non-streaming OpenAI Responses API. Configure
+its `Config.APIKey` from `OPENAI_API_KEY` at process composition time; the provider sends
+`store: false` so OpenAI does not become an additional conversation store. API keys and
+response error bodies are never persisted by Symphony.
