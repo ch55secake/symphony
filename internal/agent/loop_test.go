@@ -187,3 +187,139 @@ func TestReadFileToolValidatesArgumentsAndTruncates(t *testing.T) {
 		t.Fatal("Execute() error = nil, want invalid argument error")
 	}
 }
+
+func TestWriteFileToolPausesThenApprovesAndResumes(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store := &recordingStore{}
+	sessions := session.New(store, audit.DefaultPolicy())
+	handle, err := sessions.Start(context.Background(), "user", root)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	turns, err := New(sessions)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	workspaceService, err := workspace.New(sessions, root)
+	if err != nil {
+		t.Fatalf("workspace.New() error = %v", err)
+	}
+	writeTool, err := NewWriteFileTool(workspaceService)
+	if err != nil {
+		t.Fatalf("NewWriteFileTool() error = %v", err)
+	}
+	loop, err := NewLoop(turns, []Tool{writeTool}, 2)
+	if err != nil {
+		t.Fatalf("NewLoop() error = %v", err)
+	}
+	provider := &sequentialProvider{completions: []Completion{
+		{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "write_file", Arguments: json.RawMessage(`{"path":"note.txt","content":"new content"}`)}}, StopReason: "tool_use"},
+		{Content: "write complete", StopReason: "stop"},
+	}}
+	result, err := loop.RunWithApproval(context.Background(), handle, "user", provider, CompletionRequest{Model: "test-model", Messages: []Message{{Role: RoleUser, Content: "write note"}}, Tools: []ToolDefinition{writeTool.Definition()}})
+	if err != nil || result.Pending == nil {
+		t.Fatalf("RunWithApproval() result = %#v, error = %v; want pending approval", result, err)
+	}
+	if result.Pending.Action != "write_file" || result.Pending.Summary != "write note.txt (11 bytes)" {
+		t.Fatalf("pending = %#v, want safe write metadata", result.Pending)
+	}
+	if _, err := os.Stat(filepath.Join(root, "note.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file exists before approval: %v", err)
+	}
+	if len(store.events) != 6 || store.events[4].Type != events.FileWriteRequested || store.events[5].Type != events.ApprovalRequested {
+		t.Fatalf("events = %#v, want write request and approval request", store.events)
+	}
+
+	resumed, err := loop.Approve(context.Background(), handle, "user", provider, result.Pending)
+	if err != nil || resumed.Completion == nil || resumed.Completion.Content != "write complete" {
+		t.Fatalf("Approve() result = %#v, error = %v", resumed, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(root, "note.txt")); err != nil || string(content) != "new content" {
+		t.Fatalf("written file = %q, %v", content, err)
+	}
+	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.FileWriteApproved || store.events[8].Type != events.FileWriteCompleted || store.events[9].Type != events.ToolResult {
+		t.Fatalf("events = %#v, want approved write lifecycle", store.events)
+	}
+}
+
+func TestWriteFileToolDenialResumesWithErrorResult(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store := &recordingStore{}
+	sessions := session.New(store, audit.DefaultPolicy())
+	handle, err := sessions.Start(context.Background(), "user", root)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	turns, err := New(sessions)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	workspaceService, err := workspace.New(sessions, root)
+	if err != nil {
+		t.Fatalf("workspace.New() error = %v", err)
+	}
+	writeTool, err := NewWriteFileTool(workspaceService)
+	if err != nil {
+		t.Fatalf("NewWriteFileTool() error = %v", err)
+	}
+	loop, err := NewLoop(turns, []Tool{writeTool}, 2)
+	if err != nil {
+		t.Fatalf("NewLoop() error = %v", err)
+	}
+	provider := &sequentialProvider{completions: []Completion{
+		{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "write_file", Arguments: json.RawMessage(`{"path":"note.txt","content":"new content"}`)}}, StopReason: "tool_use"},
+		{Content: "write denied", StopReason: "stop"},
+	}}
+	result, err := loop.RunWithApproval(context.Background(), handle, "user", provider, CompletionRequest{Model: "test-model", Messages: []Message{{Role: RoleUser, Content: "write note"}}})
+	if err != nil || result.Pending == nil {
+		t.Fatalf("RunWithApproval() result = %#v, error = %v", result, err)
+	}
+	resumed, err := loop.Deny(context.Background(), handle, "user", provider, result.Pending, "user_denied")
+	if err != nil || resumed.Completion == nil || resumed.Completion.Content != "write denied" {
+		t.Fatalf("Deny() result = %#v, error = %v", resumed, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "note.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file exists after denial: %v", err)
+	}
+	if len(provider.calls) != 2 || len(provider.calls[1].Messages[2].ToolResults) != 1 || !provider.calls[1].Messages[2].ToolResults[0].IsError {
+		t.Fatalf("follow-up = %#v, want error tool result", provider.calls)
+	}
+	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResult {
+		t.Fatalf("events = %#v, want denied approval lifecycle", store.events)
+	}
+}
+
+func TestPendingApprovalRejectsCrossSessionAndReuse(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store := &recordingStore{}
+	sessions := session.New(store, audit.DefaultPolicy())
+	handle, err := sessions.Start(context.Background(), "user", root)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	other, err := sessions.Start(context.Background(), "user", root)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	turns, _ := New(sessions)
+	workspaceService, _ := workspace.New(sessions, root)
+	writeTool, _ := NewWriteFileTool(workspaceService)
+	loop, _ := NewLoop(turns, []Tool{writeTool}, 1)
+	provider := &sequentialProvider{completions: []Completion{{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "write_file", Arguments: json.RawMessage(`{"path":"note.txt","content":"new"}`)}}}, {Content: "done"}}}
+	result, err := loop.RunWithApproval(context.Background(), handle, "user", provider, CompletionRequest{Model: "test-model", Messages: []Message{{Role: RoleUser, Content: "write"}}})
+	if err != nil {
+		t.Fatalf("RunWithApproval() error = %v", err)
+	}
+	if _, err := loop.Approve(context.Background(), other, "user", provider, result.Pending); !errors.Is(err, ErrApprovalSession) {
+		t.Fatalf("Approve() error = %v, want ErrApprovalSession", err)
+	}
+	if _, err := loop.Approve(context.Background(), handle, "user", provider, result.Pending); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if _, err := loop.Approve(context.Background(), handle, "user", provider, result.Pending); !errors.Is(err, ErrApprovalUsed) {
+		t.Fatalf("Approve() error = %v, want ErrApprovalUsed", err)
+	}
+}

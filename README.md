@@ -99,3 +99,10 @@ keys and Anthropic response error bodies are never persisted by Symphony.
 It persists metadata-only tool results before each follow-up provider request, forwards
 bounded file content only in memory, and stops on unknown tools, tool failures, provider
 errors, cancellation, or its configured tool-round limit.
+
+## Write Approval Bridge
+
+The `write_file` tool pauses `agent.Loop` after persisting a write request and generic
+approval request. Callers must explicitly approve or deny the returned pending action;
+approval executes the hash-bound write and resumes the provider loop, while denial resumes
+with an error tool result and performs no filesystem mutation.

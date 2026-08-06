@@ -163,6 +163,11 @@ func (s *Service) RecordToolResult(ctx context.Context, handle *session.Handle, 
 	})
 }
 
+// RecordApproval persists an operator decision before an approved action executes.
+func (s *Service) RecordApproval(ctx context.Context, handle *session.Handle, actor string, eventType events.Type, payload any) error {
+	return s.sessions.Record(ctx, handle, eventType, actor, payload)
+}
+
 func hashRequest(request CompletionRequest) (string, error) {
 	encoded, err := json.Marshal(request)
 	if err != nil {

@@ -36,6 +36,9 @@ const (
 	ModelCompleted     Type = "model.completed"
 	ModelFailed        Type = "model.failed"
 	ToolResult         Type = "tool.result"
+	ApprovalRequested  Type = "approval.requested"
+	ApprovalGranted    Type = "approval.granted"
+	ApprovalDenied     Type = "approval.denied"
 	PolicyRedacted     Type = "policy.redacted"
 )
 
