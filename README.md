@@ -65,3 +65,10 @@ Writes use a durable request, approval, and execution flow. `file.write.requeste
 records only the proposed path, byte count, and content hash. A separate
 `file.write.approved` event is required before execution validates the supplied content
 against that hash and atomically replaces the target. Raw write content is never persisted.
+
+## Workspace Commands
+
+Commands use the same durable request and approval flow. They accept an executable and
+argument list, never an implicit shell string, and may only use a workspace-relative
+working directory. Runtime stdout and stderr are bounded and returned to the caller;
+events retain only output hashes, byte counts, truncation state, exit code, and duration.

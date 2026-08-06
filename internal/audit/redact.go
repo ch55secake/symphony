@@ -25,6 +25,7 @@ func DefaultPolicy() Policy {
 		},
 		ValuePatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)bearer\s+[a-z0-9._-]+`),
+			regexp.MustCompile(`(?i)(?:^|--?)(?:api[_-]?key|authorization|password|secret|token|credential)=\S+`),
 		},
 	}
 }

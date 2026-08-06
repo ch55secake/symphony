@@ -27,6 +27,10 @@ const (
 	FileWriteApproved  Type = "file.write.approved"
 	FileWriteCompleted Type = "file.write.completed"
 	FileWriteFailed    Type = "file.write.failed"
+	CommandRequested   Type = "command.requested"
+	CommandApproved    Type = "command.approved"
+	CommandCompleted   Type = "command.completed"
+	CommandFailed      Type = "command.failed"
 	PolicyRedacted     Type = "policy.redacted"
 )
 

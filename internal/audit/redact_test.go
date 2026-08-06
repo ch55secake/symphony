@@ -56,3 +56,25 @@ func TestDefaultPolicyRedactsSensitiveValuesInArrays(t *testing.T) {
 		t.Fatalf("note = %q, want %q", got, RedactedValue)
 	}
 }
+
+func TestDefaultPolicyRedactsSecretCommandArguments(t *testing.T) {
+	t.Parallel()
+	payload, redactions, err := DefaultPolicy().Redact(map[string]any{
+		"arguments": []any{"--token=top-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Redact() error = %v", err)
+	}
+	if len(redactions) != 1 || redactions[0].Path != "$.arguments[0]" {
+		t.Fatalf("redactions = %#v, want command argument redaction", redactions)
+	}
+	var decoded struct {
+		Arguments []string `json:"arguments"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := decoded.Arguments[0]; got != RedactedValue {
+		t.Fatalf("argument = %q, want %q", got, RedactedValue)
+	}
+}
