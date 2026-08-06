@@ -58,3 +58,10 @@ metadata. Payloads pass through the audit policy before they are persisted.
 `file.read.requested` before opening the file, followed by a completion or failure event.
 Completion events contain only the path, byte count, duration, and content hash; raw file
 content is returned to the caller but is never persisted.
+
+## Workspace Writes
+
+Writes use a durable request, approval, and execution flow. `file.write.requested`
+records only the proposed path, byte count, and content hash. A separate
+`file.write.approved` event is required before execution validates the supplied content
+against that hash and atomically replaces the target. Raw write content is never persisted.

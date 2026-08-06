@@ -34,3 +34,33 @@ type FileReadFailedPayload struct {
 	Code       string `json:"code"`
 	DurationMS int64  `json:"duration_ms"`
 }
+
+// FileWriteRequestedPayload records the content identity proposed for a file write.
+type FileWriteRequestedPayload struct {
+	OperationID string `json:"operation_id"`
+	Path        string `json:"path"`
+	Bytes       int    `json:"bytes"`
+	ContentHash string `json:"content_hash"`
+}
+
+// FileWriteApprovedPayload records an operator's approval of a proposed file write.
+type FileWriteApprovedPayload struct {
+	OperationID string `json:"operation_id"`
+}
+
+// FileWriteCompletedPayload records metadata about a completed file write.
+type FileWriteCompletedPayload struct {
+	OperationID string `json:"operation_id"`
+	Path        string `json:"path"`
+	Bytes       int    `json:"bytes"`
+	ContentHash string `json:"content_hash"`
+	DurationMS  int64  `json:"duration_ms"`
+}
+
+// FileWriteFailedPayload records safe metadata about a failed file write.
+type FileWriteFailedPayload struct {
+	OperationID string `json:"operation_id"`
+	Path        string `json:"path"`
+	Code        string `json:"code"`
+	DurationMS  int64  `json:"duration_ms"`
+}
