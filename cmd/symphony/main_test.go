@@ -13,6 +13,7 @@ import (
 	"github.com/ch55secake/symphony/internal/audit"
 	appconfig "github.com/ch55secake/symphony/internal/config"
 	"github.com/ch55secake/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/providers/opencode"
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/tui"
 	"github.com/ch55secake/symphony/internal/workspace"
@@ -255,6 +256,22 @@ func TestConfigFromTUIValidatesSelection(t *testing.T) {
 	} {
 		if _, err := configFromTUI(selected, appconfig.Settings{}); err == nil {
 			t.Fatalf("configFromTUI(%#v) error = nil", selected)
+		}
+	}
+}
+
+func TestConfigFromTUIConfiguresOpenCodeGoTransports(t *testing.T) {
+	for _, test := range []struct {
+		model     string
+		transport string
+	}{
+		{model: "gpt-5.6-luna", transport: opencode.TransportResponses},
+		{model: "minimax-m3", transport: "messages"},
+		{model: "kimi-k2.7-code", transport: opencode.TransportChat},
+	} {
+		parsed, err := configFromTUI(tui.SetupConfig{Provider: "opencode-go", Model: test.model, Workspace: "/workspace", APIKey: "test-key"}, appconfig.Settings{})
+		if err != nil || parsed.transport != test.transport || parsed.apiKey != "test-key" {
+			t.Fatalf("configFromTUI(%q) = %#v, %v", test.model, parsed, err)
 		}
 	}
 }

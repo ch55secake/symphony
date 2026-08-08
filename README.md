@@ -197,6 +197,9 @@ fetches the models available to that provider, and saves the selected provider, 
 and model in the user configuration file. The TUI always uses the current directory as
 the workspace.
 
+Choose `opencode-go` for an OpenCode Go subscription. It uses the Go model catalog and
+endpoint, which are separate from pay-as-you-go OpenCode Zen billing.
+
 Use `Enter` to send a prompt. The TUI retains conversation and tool
 context in memory for the current session. Write and command requests remain paused
 until explicitly approved with `y` or denied with `n` or `Esc`; the interface shows

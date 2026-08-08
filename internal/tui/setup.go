@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var providers = []string{"opencode", "openai", "anthropic"}
+var providers = []string{"opencode-go", "opencode", "openai", "anthropic"}
 
 // SetupConfig contains the session settings chosen before the agent starts.
 type SetupConfig struct {

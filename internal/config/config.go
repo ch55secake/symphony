@@ -103,7 +103,7 @@ func saveConnection(path, provider, apiKey, model string) error {
 		v.Set("openai_api_key", apiKey)
 	case "anthropic":
 		v.Set("anthropic_api_key", apiKey)
-	case "opencode":
+	case "opencode", "opencode-go":
 		v.Set("opencode_api_key", apiKey)
 	default:
 		return fmt.Errorf("unknown provider %q", provider)

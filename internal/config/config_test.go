@@ -69,3 +69,14 @@ func TestSaveConnectionPreservesExistingSettings(t *testing.T) {
 		t.Fatalf("config permissions = %v, %v", info.Mode().Perm(), err)
 	}
 }
+
+func TestSaveConnectionUsesOpenCodeKeyForGo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := saveConnection(path, "opencode-go", "test-key", "gpt-5.6-luna"); err != nil {
+		t.Fatalf("saveConnection() error = %v", err)
+	}
+	settings, err := LoadFile(path)
+	if err != nil || settings.Provider != "opencode-go" || settings.OpenCodeAPIKey != "test-key" || settings.Model != "gpt-5.6-luna" {
+		t.Fatalf("LoadFile() = %#v, %v", settings, err)
+	}
+}

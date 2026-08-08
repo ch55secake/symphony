@@ -38,6 +38,8 @@ func List(ctx context.Context, config Config) ([]string, error) {
 			baseURL = openAIURL
 		case "opencode":
 			baseURL = opencodeURL
+		case "opencode-go":
+			baseURL = "https://opencode.ai/zen/go/v1"
 		case "anthropic":
 			baseURL = anthropicURL
 		default:

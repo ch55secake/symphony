@@ -289,10 +289,10 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 	if flags.NArg() != 1 || strings.TrimSpace(flags.Arg(0)) == "" {
 		return config{}, errors.New("a prompt is required")
 	}
-	if *provider != "openai" && *provider != "anthropic" && *provider != "opencode" {
-		return config{}, errors.New("provider must be openai, anthropic, or opencode")
+	if *provider != "openai" && *provider != "anthropic" && *provider != "opencode" && *provider != "opencode-go" {
+		return config{}, errors.New("provider must be openai, anthropic, opencode, or opencode-go")
 	}
-	if *provider == "opencode" && *transport != opencode.TransportResponses && *transport != opencode.TransportChat {
+	if (*provider == "opencode" || *provider == "opencode-go") && *transport != opencode.TransportResponses && *transport != opencode.TransportChat {
 		return config{}, errors.New("OpenCode transport must be responses or chat-completions")
 	}
 	if strings.TrimSpace(*model) == "" {
@@ -322,14 +322,17 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 }
 
 func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (config, error) {
-	if selected.Provider != "openai" && selected.Provider != "anthropic" && selected.Provider != "opencode" {
-		return config{}, errors.New("provider must be openai, anthropic, or opencode")
+	if selected.Provider != "openai" && selected.Provider != "anthropic" && selected.Provider != "opencode" && selected.Provider != "opencode-go" {
+		return config{}, errors.New("provider must be openai, anthropic, opencode, or opencode-go")
 	}
 	transport := settings.Transport
 	if transport == "" {
 		transport = opencode.TransportResponses
 	}
-	if selected.Provider == "opencode" && transport != opencode.TransportResponses && transport != opencode.TransportChat {
+	if selected.Provider == "opencode-go" {
+		transport = openCodeGoTransport(selected.Model)
+	}
+	if (selected.Provider == "opencode" || selected.Provider == "opencode-go") && transport != opencode.TransportResponses && transport != opencode.TransportChat && transport != "messages" {
 		return config{}, errors.New("OpenCode transport must be responses or chat-completions")
 	}
 	if strings.TrimSpace(selected.Model) == "" {
@@ -426,7 +429,7 @@ func providerAPIKey(provider string, settings appconfig.Settings) string {
 		return settings.OpenAIAPIKey
 	case "anthropic":
 		return settings.AnthropicAPIKey
-	case "opencode":
+	case "opencode", "opencode-go":
 		return settings.OpenCodeAPIKey
 	default:
 		return ""
@@ -442,7 +445,23 @@ func newProvider(name, transport, apiKey string) (agent.Provider, error) {
 		return anthropic.New(anthropic.Config{APIKey: apiKey})
 	case "opencode":
 		return opencode.New(opencode.Config{APIKey: apiKey, Transport: transport})
+	case "opencode-go":
+		if transport == "messages" {
+			return anthropic.New(anthropic.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go"})
+		}
+		return opencode.New(opencode.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go/v1", Transport: transport})
 	default:
 		return nil, errors.New("provider must be openai, anthropic, or opencode")
+	}
+}
+
+func openCodeGoTransport(model string) string {
+	switch model {
+	case "gpt-5.6-luna":
+		return opencode.TransportResponses
+	case "minimax-m3", "minimax-m2.7", "minimax-m2.5", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus":
+		return "messages"
+	default:
+		return opencode.TransportChat
 	}
 }
