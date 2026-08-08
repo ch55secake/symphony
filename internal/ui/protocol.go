@@ -4,6 +4,7 @@ package ui
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -31,22 +32,33 @@ type State struct {
 
 // SendState writes a display state without exposing backend capabilities.
 func SendState(writer io.Writer, state State) error {
-	return Write(writer, Message{Type: "state", Payload: mustJSON(state)})
-}
-
-func mustJSON(value any) json.RawMessage {
-	encoded, _ := json.Marshal(value)
-	return encoded
+	for {
+		payload, err := json.Marshal(state)
+		if err != nil {
+			return fmt.Errorf("encode UI state: %w", err)
+		}
+		if len(state.Transcript) == 0 || len(payload)+128 < maxMessageBytes {
+			return Write(writer, Message{Type: "state", Payload: payload})
+		}
+		state.Transcript = state.Transcript[1:]
+	}
 }
 
 // Read decodes one bounded protocol message.
 func Read(reader *bufio.Reader) (Message, error) {
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		return Message{}, err
-	}
-	if len(line) > maxMessageBytes {
-		return Message{}, fmt.Errorf("UI protocol message exceeds %d bytes", maxMessageBytes)
+	line := make([]byte, 0, 4096)
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(line)+len(fragment) > maxMessageBytes {
+			return Message{}, fmt.Errorf("UI protocol message exceeds %d bytes", maxMessageBytes)
+		}
+		line = append(line, fragment...)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return Message{}, err
+		}
 	}
 	var message Message
 	if err := json.Unmarshal(line, &message); err != nil {
@@ -68,7 +80,7 @@ func Write(writer io.Writer, message Message) error {
 	if err != nil {
 		return fmt.Errorf("encode UI protocol message: %w", err)
 	}
-	if len(encoded) > maxMessageBytes {
+	if len(encoded)+1 > maxMessageBytes {
 		return fmt.Errorf("UI protocol message exceeds %d bytes", maxMessageBytes)
 	}
 	if _, err := writer.Write(append(encoded, '\n')); err != nil {

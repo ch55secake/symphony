@@ -202,12 +202,14 @@ The TUI always uses the current directory as the workspace.
 
 While chat is open, these commands manage the active session:
 
-- `/connect` changes provider, API key, and model using the masked connection picker.
 - `/model` lists models for the active provider; `/model NAME` selects one directly.
-- `/theme` lists built-in themes; `/theme default`, `/theme contrast`, and `/theme mono` apply and persist a theme.
-- `/allow-all` enables automatic approval for workspace writes and commands for the current session after confirmation. `/allow-all off` restores prompts. Every action remains recorded and constrained to the workspace.
+- `/theme default`, `/theme contrast`, and `/theme mono` persist a theme for the next session.
+- `/allow-all` enables automatic approval for workspace writes and commands for the current session. `/allow-all off` restores prompts. Every action remains recorded and constrained to the workspace.
 - `/settings` displays the current connection, theme, and approval mode.
 - `/help` lists available commands.
+
+The OpenTUI migration path requires a saved connection. Use the legacy `/connect` flow
+while it remains available until connection setup is ported to OpenTUI.
 
 Choose `opencode-go` for an OpenCode Go subscription. It uses the Go model catalog and
 endpoint, which are separate from pay-as-you-go OpenCode Zen billing.

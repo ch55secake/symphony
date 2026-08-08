@@ -13,6 +13,7 @@ import (
 type Child struct {
 	Command *exec.Cmd
 	Reader  *bufio.Reader
+	reader  io.Closer
 	Writer  io.WriteCloser
 }
 
@@ -43,7 +44,7 @@ func Start(ctx context.Context, executable string) (*Child, error) {
 	}
 	_ = toUIReader.Close()
 	_ = fromUIWriter.Close()
-	return &Child{Command: command, Reader: bufio.NewReader(fromUIReader), Writer: toUIWriter}, nil
+	return &Child{Command: command, Reader: bufio.NewReader(fromUIReader), reader: fromUIReader, Writer: toUIWriter}, nil
 }
 
 // Close terminates the UI process and its private protocol pipes.
@@ -53,6 +54,9 @@ func (c *Child) Close() error {
 	}
 	if c.Writer != nil {
 		_ = c.Writer.Close()
+	}
+	if c.reader != nil {
+		_ = c.reader.Close()
 	}
 	if c.Command != nil && c.Command.Process != nil {
 		_ = c.Command.Process.Kill()
