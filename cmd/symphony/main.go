@@ -99,7 +99,7 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 		var err error
 		executable, err = ui.Extract()
 		if err != nil {
-			return err
+			return runBubbleTUI(ctx, factory, startKurrent)
 		}
 	}
 	return runOpenTUI(ctx, factory, startKurrent, executable)
@@ -211,7 +211,11 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 	if err != nil {
 		return err
 	}
-	selected, saved := savedSetup(settings, mustWorkspace())
+	workspace, err := currentWorkspace()
+	if err != nil {
+		return err
+	}
+	selected, saved := savedSetup(settings, workspace)
 	if !saved {
 		return errors.New("OpenTUI setup requires a saved connection; run the Go TUI once or configure provider, model, and API key")
 	}
@@ -242,6 +246,9 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 		}
 		switch message.Type {
 		case "app.ready":
+			if err := sendUIState(child.Writer, config, messages, pending, "READY"); err != nil {
+				return err
+			}
 			continue
 		case "app.quit":
 			return runtime.sessions.Finish(ctx, handle, actor, "quit")
@@ -269,11 +276,14 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				continue
 			}
 			messages, pending = result.Messages, result.Pending
-			if pending != nil && allowAll {
+			for pending != nil && allowAll {
 				result, err = runtime.loop.Approve(ctx, handle, actor, runtime.provider, pending)
-				if err == nil {
-					messages, pending = result.Messages, result.Pending
+				if err != nil {
+					_ = sendUIState(child.Writer, config, messages, nil, displayUIError(err))
+					pending = nil
+					break
 				}
+				messages, pending = result.Messages, result.Pending
 			}
 		case "approval.resolve":
 			var request struct {
@@ -310,7 +320,15 @@ func handleUICommand(ctx context.Context, runtime *runtime, handle *session.Hand
 	case "/help":
 		return "Commands: /model [NAME], /theme [default|contrast|mono], /allow-all [on|off], /settings", allowAll, true
 	case "/settings":
-		return fmt.Sprintf("Provider: %s  Model: %s  Theme: %s  Approval: %s", config.provider, config.model, "configured", approvalModeLabel(allowAll)), allowAll, true
+		settings, err := appconfig.Load()
+		if err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		theme := settings.Theme
+		if theme == "" {
+			theme = "default"
+		}
+		return fmt.Sprintf("Provider: %s  Model: %s  Theme: %s (next session)  Approval: %s", config.provider, config.model, theme, approvalModeLabel(allowAll)), allowAll, true
 	case "/allow-all":
 		enabled := len(parts) < 2 || parts[1] == "on"
 		if len(parts) > 1 && parts[1] != "on" && parts[1] != "off" {
@@ -330,7 +348,7 @@ func handleUICommand(ctx context.Context, runtime *runtime, handle *session.Hand
 		if err := appconfig.SaveTheme(parts[1]); err != nil {
 			return "Error: " + err.Error(), allowAll, true
 		}
-		return "Theme: " + parts[1], allowAll, true
+		return "Theme: " + parts[1] + " (applies next session)", allowAll, true
 	case "/model":
 		if len(parts) == 1 {
 			if err := runtime.sessions.Record(ctx, handle, events.ModelListRequested, actor, events.ModelListRequestedPayload{Provider: config.provider}); err != nil {
@@ -367,16 +385,16 @@ func approvalModeLabel(allowAll bool) string {
 	return "confirm each action"
 }
 
-func mustWorkspace() string {
+func currentWorkspace() (string, error) {
 	workspace, err := os.Getwd()
 	if err != nil {
-		return "."
+		return "", fmt.Errorf("get working directory: %w", err)
 	}
 	workspace, err = filepath.Abs(workspace)
 	if err != nil {
-		return "."
+		return "", fmt.Errorf("resolve workspace path: %w", err)
 	}
-	return workspace
+	return workspace, nil
 }
 
 func sendUIState(writer io.Writer, config config, messages []agent.Message, pending *agent.PendingApproval, status string) error {

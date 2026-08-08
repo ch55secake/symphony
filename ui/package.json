@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/index.tsx",
-    "build": "mkdir -p ../internal/ui/assets && bun build --compile --target=${BUN_TARGET:-bun-darwin-arm64} --outfile=../internal/ui/assets/symphony-ui src/index.tsx",
+    "build": "mkdir -p ../internal/ui/assets && bun build --compile ${BUN_TARGET:+--target=$BUN_TARGET} --outfile=../internal/ui/assets/symphony-ui src/index.tsx",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
