@@ -17,6 +17,7 @@ import (
 
 	"github.com/ch55secake/symphony/internal/agent"
 	"github.com/ch55secake/symphony/internal/audit"
+	appconfig "github.com/ch55secake/symphony/internal/config"
 	"github.com/ch55secake/symphony/internal/events"
 	"github.com/ch55secake/symphony/internal/providers/anthropic"
 	"github.com/ch55secake/symphony/internal/providers/openai"
@@ -31,11 +32,13 @@ import (
 const actor = "cli"
 
 type config struct {
-	provider  string
-	transport string
-	model     string
-	workspace string
-	prompt    string
+	provider         string
+	transport        string
+	model            string
+	workspace        string
+	prompt           string
+	connectionString string
+	apiKey           string
 }
 
 type runtime struct {
@@ -192,7 +195,11 @@ func replay(ctx context.Context, args []string, output io.Writer, factory replay
 	if err != nil {
 		return errors.New("session ID must be a UUID")
 	}
-	connectionString := os.Getenv("KURRENTDB_URL")
+	settings, err := appconfig.Load()
+	if err != nil {
+		return err
+	}
+	connectionString := settings.KurrentDBURL
 	if connectionString == "" {
 		return errors.New("KURRENTDB_URL is required")
 	}
@@ -215,12 +222,20 @@ func replay(ctx context.Context, args []string, output io.Writer, factory replay
 }
 
 func parseConfig(args []string) (config, error) {
+	settings, err := appconfig.Load()
+	if err != nil {
+		return config{}, err
+	}
+	return parseConfigWithSettings(args, settings)
+}
+
+func parseConfigWithSettings(args []string, settings appconfig.Settings) (config, error) {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	provider := flags.String("provider", "", "provider: openai, anthropic, or opencode")
-	transport := flags.String("transport", opencode.TransportResponses, "OpenCode transport: responses or chat-completions")
-	model := flags.String("model", "", "model name")
-	workspaceRoot := flags.String("workspace", "", "workspace root")
+	provider := flags.String("provider", settings.Provider, "provider: openai, anthropic, or opencode")
+	transport := flags.String("transport", settings.Transport, "OpenCode transport: responses or chat-completions")
+	model := flags.String("model", settings.Model, "model name")
+	workspaceRoot := flags.String("workspace", settings.Workspace, "workspace root")
 	if len(args) == 0 || args[0] != "run" {
 		return config{}, errors.New("usage: symphony run --provider PROVIDER --model MODEL [--workspace PATH] PROMPT")
 	}
@@ -251,16 +266,32 @@ func parseConfig(args []string) (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("resolve workspace path: %w", err)
 	}
-	return config{provider: *provider, transport: *transport, model: *model, workspace: root, prompt: flags.Arg(0)}, nil
+	return config{
+		provider:         *provider,
+		transport:        *transport,
+		model:            *model,
+		workspace:        root,
+		prompt:           flags.Arg(0),
+		connectionString: settings.KurrentDBURL,
+		apiKey:           providerAPIKey(*provider, settings),
+	}, nil
 }
 
 func parseTUIConfig(args []string) (config, error) {
+	settings, err := appconfig.Load()
+	if err != nil {
+		return config{}, err
+	}
+	return parseTUIConfigWithSettings(args, settings)
+}
+
+func parseTUIConfigWithSettings(args []string, settings appconfig.Settings) (config, error) {
 	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	provider := flags.String("provider", "", "provider: openai, anthropic, or opencode")
-	transport := flags.String("transport", opencode.TransportResponses, "OpenCode transport: responses or chat-completions")
-	model := flags.String("model", "", "model name")
-	workspaceRoot := flags.String("workspace", "", "workspace root")
+	provider := flags.String("provider", settings.Provider, "provider: openai, anthropic, or opencode")
+	transport := flags.String("transport", settings.Transport, "OpenCode transport: responses or chat-completions")
+	model := flags.String("model", settings.Model, "model name")
+	workspaceRoot := flags.String("workspace", settings.Workspace, "workspace root")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -288,7 +319,14 @@ func parseTUIConfig(args []string) (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("resolve workspace path: %w", err)
 	}
-	return config{provider: *provider, transport: *transport, model: *model, workspace: root}, nil
+	return config{
+		provider:         *provider,
+		transport:        *transport,
+		model:            *model,
+		workspace:        root,
+		connectionString: settings.KurrentDBURL,
+		apiKey:           providerAPIKey(*provider, settings),
+	}, nil
 }
 
 func promptApproval(input io.Reader, output io.Writer, pending *agent.PendingApproval) (bool, error) {
@@ -310,15 +348,14 @@ func failureReason(ctx context.Context) string {
 }
 
 func newRuntime(config config) (*runtime, error) {
-	connectionString := os.Getenv("KURRENTDB_URL")
-	if connectionString == "" {
+	if config.connectionString == "" {
 		return nil, errors.New("KURRENTDB_URL is required")
 	}
-	store, err := kurrentdb.New(connectionString)
+	store, err := kurrentdb.New(config.connectionString)
 	if err != nil {
 		return nil, err
 	}
-	provider, err := newProvider(config.provider, config.transport)
+	provider, err := newProvider(config.provider, config.transport, config.apiKey)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -367,14 +404,27 @@ func newReplayReader(connectionString string) (replayReader, error) {
 	return kurrentdb.New(connectionString)
 }
 
-func newProvider(name, transport string) (agent.Provider, error) {
+func providerAPIKey(provider string, settings appconfig.Settings) string {
+	switch provider {
+	case "openai":
+		return settings.OpenAIAPIKey
+	case "anthropic":
+		return settings.AnthropicAPIKey
+	case "opencode":
+		return settings.OpenCodeAPIKey
+	default:
+		return ""
+	}
+}
+
+func newProvider(name, transport, apiKey string) (agent.Provider, error) {
 	switch name {
 	case "openai":
-		return openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
+		return openai.New(openai.Config{APIKey: apiKey})
 	case "anthropic":
-		return anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+		return anthropic.New(anthropic.Config{APIKey: apiKey})
 	case "opencode":
-		return opencode.New(opencode.Config{APIKey: os.Getenv("OPENCODE_API_KEY"), Transport: transport})
+		return opencode.New(opencode.Config{APIKey: apiKey, Transport: transport})
 	default:
 		return nil, errors.New("provider must be openai, anthropic, or opencode")
 	}
