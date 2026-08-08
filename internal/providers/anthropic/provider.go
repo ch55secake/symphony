@@ -23,36 +23,49 @@ const (
 
 // Config supplies connection details. APIKey is never persisted by this package.
 type Config struct {
-	APIKey     string
-	BaseURL    string
-	MaxTokens  int
-	HTTPClient *http.Client
+	APIKey       string
+	BaseURL      string
+	MaxTokens    int
+	HTTPClient   *http.Client
+	ProviderName string
+	BearerAuth   bool
 }
 
 // Provider completes agent turns through the Anthropic Messages API.
 type Provider struct {
-	apiKey     string
-	baseURL    string
-	maxTokens  int
-	httpClient *http.Client
+	apiKey       string
+	baseURL      string
+	maxTokens    int
+	httpClient   *http.Client
+	providerName string
+	bearerAuth   bool
 }
 
 // Error is a safe representation of a non-successful Anthropic response.
 type Error struct {
 	StatusCode int
 	Detail     string
+	Provider   string
 }
 
 func (e *Error) Error() string {
-	if e.Detail != "" {
-		return fmt.Sprintf("Anthropic response returned HTTP %d: %s", e.StatusCode, e.Detail)
+	provider := e.Provider
+	if provider == "" {
+		provider = "Anthropic"
 	}
-	return fmt.Sprintf("Anthropic response returned HTTP %d", e.StatusCode)
+	if e.Detail != "" {
+		return fmt.Sprintf("%s response returned HTTP %d: %s", provider, e.StatusCode, e.Detail)
+	}
+	return fmt.Sprintf("%s response returned HTTP %d", provider, e.StatusCode)
 }
 
 func New(config Config) (*Provider, error) {
+	name := config.ProviderName
+	if name == "" {
+		name = "Anthropic"
+	}
 	if strings.TrimSpace(config.APIKey) == "" {
-		return nil, errors.New("Anthropic API key is required")
+		return nil, fmt.Errorf("%s API key is required", name)
 	}
 	baseURL := strings.TrimRight(config.BaseURL, "/")
 	if baseURL == "" {
@@ -66,11 +79,11 @@ func New(config Config) (*Provider, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &Provider{apiKey: config.APIKey, baseURL: baseURL, maxTokens: maxTokens, httpClient: client}, nil
+	return &Provider{apiKey: config.APIKey, baseURL: baseURL, maxTokens: maxTokens, httpClient: client, providerName: name, bearerAuth: config.BearerAuth}, nil
 }
 
 func (p *Provider) Name() string {
-	return "anthropic"
+	return strings.ToLower(strings.ReplaceAll(p.providerName, " ", "-"))
 }
 
 // Complete performs a non-streaming completion. Symphony persists turn events around it.
@@ -87,8 +100,12 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 	if err != nil {
 		return agent.Completion{}, fmt.Errorf("create Anthropic request: %w", err)
 	}
-	httpRequest.Header.Set("x-api-key", p.apiKey)
-	httpRequest.Header.Set("anthropic-version", apiVersion)
+	if p.bearerAuth {
+		httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
+	} else {
+		httpRequest.Header.Set("x-api-key", p.apiKey)
+		httpRequest.Header.Set("anthropic-version", apiVersion)
+	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 
 	response, err := p.httpClient.Do(httpRequest)
@@ -97,12 +114,12 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return agent.Completion{}, &Error{StatusCode: response.StatusCode, Detail: providers.ErrorDetail(response.Body, p.apiKey)}
+		return agent.Completion{}, &Error{StatusCode: response.StatusCode, Detail: providers.ErrorDetail(response.Body, p.apiKey), Provider: p.providerName}
 	}
 
 	var responsePayload messagesResponse
 	if err := json.NewDecoder(response.Body).Decode(&responsePayload); err != nil {
-		return agent.Completion{}, fmt.Errorf("decode Anthropic response: %w", err)
+		return agent.Completion{}, fmt.Errorf("decode %s response: %w", p.providerName, err)
 	}
 	return toCompletion(responsePayload)
 }

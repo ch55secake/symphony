@@ -131,6 +131,28 @@ func TestNewRequiresAPIKeyAndDefaultsMaxTokens(t *testing.T) {
 	}
 }
 
+func TestProviderUsesBearerAuthenticationWhenConfigured(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer test-key" || request.Header.Get("x-api-key") != "" || request.Header.Get("anthropic-version") != "" {
+			t.Fatalf("headers = %#v", request.Header)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer server.Close()
+	provider, err := New(Config{APIKey: "test-key", BaseURL: server.URL, ProviderName: "OpenCode Go", BearerAuth: true, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if provider.Name() != "opencode-go" {
+		t.Fatalf("Name() = %q", provider.Name())
+	}
+	if _, err := provider.Complete(context.Background(), agent.CompletionRequest{Model: "test", Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}}}); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+}
+
 func TestRequestMapsToolResults(t *testing.T) {
 	t.Parallel()
 	request, err := toRequest(agent.CompletionRequest{Model: "claude-test", Messages: []agent.Message{
