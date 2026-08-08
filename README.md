@@ -185,13 +185,16 @@ KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' \
 
 ## Interactive TUI
 
-Start a multi-turn session in the terminal UI with the same provider and workspace
-configuration as `run`:
+Start a multi-turn session from the workspace you want Symphony to use:
 
 ```sh
-KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENCODE_API_KEY='...' \
-  go run ./cmd/symphony --provider opencode --model gpt-5.6-terra --workspace .
+go run ./cmd/symphony
 ```
+
+Symphony starts or reuses a local `symphony-kurrentdb` Docker container before opening
+the TUI. The setup screen selects the provider and model; it always uses the current
+directory as the workspace. Provider credentials may be supplied through the existing
+configuration file or environment variables.
 
 Use `Ctrl+Enter` to send a multiline prompt. The TUI retains conversation and tool
 context in memory for the current session. Write and command requests remain paused

@@ -19,6 +19,7 @@ import (
 	"github.com/ch55secake/symphony/internal/audit"
 	appconfig "github.com/ch55secake/symphony/internal/config"
 	"github.com/ch55secake/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/kurrent"
 	"github.com/ch55secake/symphony/internal/providers/anthropic"
 	"github.com/ch55secake/symphony/internal/providers/openai"
 	"github.com/ch55secake/symphony/internal/providers/opencode"
@@ -30,6 +31,8 @@ import (
 )
 
 const actor = "cli"
+
+const localKurrentDBURL = "kurrentdb://localhost:2113?tls=false"
 
 type config struct {
 	provider         string
@@ -51,6 +54,8 @@ type runtime struct {
 
 type runtimeFactory func(config) (*runtime, error)
 
+type kurrentStarter func(context.Context) error
+
 type replayReader interface {
 	Read(context.Context, uuid.UUID) ([]events.Event, error)
 	Close() error
@@ -69,22 +74,51 @@ func main() {
 
 func execute(ctx context.Context, args []string, input io.Reader, output io.Writer, factory runtimeFactory, replayFactory replayFactory) error {
 	if len(args) == 0 {
-		return runTUI(ctx, args, factory)
+		return runTUI(ctx, factory, kurrent.Start)
 	}
 	switch args[0] {
 	case "run":
 		return run(ctx, args, input, output, factory)
 	case "tui":
-		return runTUI(ctx, args[1:], factory)
+		if len(args) != 1 {
+			return errors.New("TUI settings are configured interactively")
+		}
+		return runTUI(ctx, factory, kurrent.Start)
 	case "replay":
 		return replay(ctx, args[1:], output, replayFactory)
 	default:
-		return runTUI(ctx, args, factory)
+		return errors.New("usage: symphony [run|replay]")
 	}
 }
 
-func runTUI(ctx context.Context, args []string, factory runtimeFactory) error {
-	config, err := parseTUIConfig(args)
+func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentStarter) error {
+	workspace, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		return fmt.Errorf("resolve workspace path: %w", err)
+	}
+	if err := startKurrent(ctx); err != nil {
+		return err
+	}
+	settings, err := appconfig.Load()
+	if err != nil {
+		return err
+	}
+	selected, err := tui.Select(ctx, tui.SetupConfig{
+		Provider:  settings.Provider,
+		Model:     settings.Model,
+		Workspace: workspace,
+	})
+	if errors.Is(err, tui.ErrCanceled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	config, err := configFromTUI(selected, settings)
 	if err != nil {
 		return err
 	}
@@ -277,55 +311,27 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 	}, nil
 }
 
-func parseTUIConfig(args []string) (config, error) {
-	settings, err := appconfig.Load()
-	if err != nil {
-		return config{}, err
-	}
-	return parseTUIConfigWithSettings(args, settings)
-}
-
-func parseTUIConfigWithSettings(args []string, settings appconfig.Settings) (config, error) {
-	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	provider := flags.String("provider", settings.Provider, "provider: openai, anthropic, or opencode")
-	transport := flags.String("transport", settings.Transport, "OpenCode transport: responses or chat-completions")
-	model := flags.String("model", settings.Model, "model name")
-	workspaceRoot := flags.String("workspace", settings.Workspace, "workspace root")
-	if err := flags.Parse(args); err != nil {
-		return config{}, err
-	}
-	if flags.NArg() != 0 {
-		return config{}, errors.New("usage: symphony --provider PROVIDER --model MODEL [--workspace PATH]")
-	}
-	if *provider != "openai" && *provider != "anthropic" && *provider != "opencode" {
+func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (config, error) {
+	if selected.Provider != "openai" && selected.Provider != "anthropic" && selected.Provider != "opencode" {
 		return config{}, errors.New("provider must be openai, anthropic, or opencode")
 	}
-	if *provider == "opencode" && *transport != opencode.TransportResponses && *transport != opencode.TransportChat {
+	transport := settings.Transport
+	if transport == "" {
+		transport = opencode.TransportResponses
+	}
+	if selected.Provider == "opencode" && transport != opencode.TransportResponses && transport != opencode.TransportChat {
 		return config{}, errors.New("OpenCode transport must be responses or chat-completions")
 	}
-	if strings.TrimSpace(*model) == "" {
+	if strings.TrimSpace(selected.Model) == "" {
 		return config{}, errors.New("model is required")
 	}
-	root := *workspaceRoot
-	if root == "" {
-		var err error
-		root, err = os.Getwd()
-		if err != nil {
-			return config{}, fmt.Errorf("get working directory: %w", err)
-		}
-	}
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return config{}, fmt.Errorf("resolve workspace path: %w", err)
-	}
 	return config{
-		provider:         *provider,
-		transport:        *transport,
-		model:            *model,
-		workspace:        root,
-		connectionString: settings.KurrentDBURL,
-		apiKey:           providerAPIKey(*provider, settings),
+		provider:         selected.Provider,
+		transport:        transport,
+		model:            selected.Model,
+		workspace:        selected.Workspace,
+		connectionString: localKurrentDBURL,
+		apiKey:           providerAPIKey(selected.Provider, settings),
 	}, nil
 }
 

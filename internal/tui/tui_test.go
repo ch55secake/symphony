@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ch55secake/symphony/internal/agent"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type fakeRunner struct {
@@ -76,5 +77,22 @@ func TestApprovalViewDoesNotRenderToolResultContent(t *testing.T) {
 	m = updated.(model)
 	if !runner.resolved || runner.approved || m.pending != nil || m.busy {
 		t.Fatalf("model = %#v, runner = %#v; expected denied approval", m, runner)
+	}
+}
+
+func TestSetupSelectsProviderAndRequiresModel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newSetupModel(ctx, cancel, SetupConfig{Provider: "openai", Workspace: "/workspace"})
+	m.width = 100
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(setupModel)
+	if m.provider() != "anthropic" {
+		t.Fatalf("provider = %q, want anthropic", m.provider())
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(setupModel)
+	if m.err != "A model is required." {
+		t.Fatalf("error = %q", m.err)
 	}
 }

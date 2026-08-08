@@ -14,6 +14,7 @@ import (
 	appconfig "github.com/ch55secake/symphony/internal/config"
 	"github.com/ch55secake/symphony/internal/events"
 	"github.com/ch55secake/symphony/internal/session"
+	"github.com/ch55secake/symphony/internal/tui"
 	"github.com/ch55secake/symphony/internal/workspace"
 	"github.com/google/uuid"
 )
@@ -232,53 +233,29 @@ func TestParseConfigValidatesRunArguments(t *testing.T) {
 	}
 }
 
-func TestParseTUIConfigValidatesArguments(t *testing.T) {
-	root := t.TempDir()
-	for _, args := range [][]string{
-		{"--provider", "other", "--model", "test"},
-		{"--provider", "opencode", "--transport", "other", "--model", "test"},
-		{"--provider", "openai"},
-		{"--provider", "openai", "--model", "test", "unexpected"},
-	} {
-		if _, err := parseTUIConfigWithSettings(args, appconfig.Settings{}); err == nil {
-			t.Fatalf("parseTUIConfig(%q) error = nil", args)
-		}
-	}
-	config, err := parseTUIConfigWithSettings([]string{"--provider", "opencode", "--transport", "chat-completions", "--model", "kimi-test", "--workspace", root}, appconfig.Settings{KurrentDBURL: "kurrentdb://localhost:2113?tls=false", OpenCodeAPIKey: "test-key"})
-	if err != nil || config.workspace != root || config.transport != "chat-completions" {
-		t.Fatalf("parseTUIConfig() = %#v, %v", config, err)
-	}
-}
-
-func TestParseTUIConfigUsesSettingsAndFlagPrecedence(t *testing.T) {
+func TestConfigFromTUIUsesSelectionAndLocalKurrentDB(t *testing.T) {
 	settings := appconfig.Settings{
-		KurrentDBURL:    "kurrentdb://localhost:2113?tls=false",
-		Provider:        "openai",
-		Model:           "configured-model",
 		Transport:       "responses",
-		Workspace:       "/configured-workspace",
 		OpenAIAPIKey:    "configured-key",
 		AnthropicAPIKey: "anthropic-key",
 	}
-	parsed, err := parseTUIConfigWithSettings([]string{"--provider", "anthropic", "--model", "flag-model"}, settings)
+	parsed, err := configFromTUI(tui.SetupConfig{Provider: "anthropic", Model: "selected-model", Workspace: "/workspace"}, settings)
 	if err != nil {
-		t.Fatalf("parseTUIConfigWithSettings() error = %v", err)
+		t.Fatalf("configFromTUI() error = %v", err)
 	}
-	if parsed.provider != "anthropic" || parsed.model != "flag-model" || parsed.workspace != "/configured-workspace" || parsed.connectionString != settings.KurrentDBURL || parsed.apiKey != "anthropic-key" {
-		t.Fatalf("parseTUIConfigWithSettings() = %#v", parsed)
+	if parsed.provider != "anthropic" || parsed.model != "selected-model" || parsed.workspace != "/workspace" || parsed.connectionString != localKurrentDBURL || parsed.apiKey != "anthropic-key" {
+		t.Fatalf("configFromTUI() = %#v", parsed)
 	}
 }
 
-func TestExecuteDefaultsToTUI(t *testing.T) {
-	var received config
-	err := execute(context.Background(), []string{"--provider", "openai", "--model", "test"}, strings.NewReader(""), ioDiscard{}, func(config config) (*runtime, error) {
-		received = config
-		return nil, errors.New("stop before TUI")
-	}, func(string) (replayReader, error) {
-		return nil, errors.New("unexpected replay")
-	})
-	if err == nil || err.Error() != "stop before TUI" || received.provider != "openai" || received.model != "test" {
-		t.Fatalf("execute() error = %v, config = %#v", err, received)
+func TestConfigFromTUIValidatesSelection(t *testing.T) {
+	for _, selected := range []tui.SetupConfig{
+		{Provider: "other", Model: "model", Workspace: "/workspace"},
+		{Provider: "openai", Workspace: "/workspace"},
+	} {
+		if _, err := configFromTUI(selected, appconfig.Settings{}); err == nil {
+			t.Fatalf("configFromTUI(%#v) error = nil", selected)
+		}
 	}
 }
 
