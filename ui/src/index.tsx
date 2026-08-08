@@ -1,5 +1,5 @@
 import { createCliRenderer } from "@opentui/core"
-import { createRoot, useKeyboard } from "@opentui/react"
+import { createRoot, useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useState } from "react"
 
 type Entry = { role: "user" | "assistant" | "activity"; label: string; content?: string; activity?: string }
@@ -33,16 +33,16 @@ async function send(message: ClientMessage) {
 
 function Composer({ value, setValue, submit, suggestions, selected }: { value: string; setValue: (value: string) => void; submit: () => void; suggestions: typeof commands; selected: number }) {
   return <>
-    {suggestions.length > 0 && <box border borderColor="#475569" flexDirection="column" paddingLeft={1} paddingRight={1}>
-      {suggestions.map((command, index) => <box key={command.name} flexDirection="row" justifyContent="space-between"><text fg={index === selected ? "#f9a8d4" : "#cbd5e1"}>{index === selected ? "> " : "  "}{command.name}</text><text fg="#64748b">{command.description}</text></box>)}
+    {suggestions.length > 0 && <box border borderColor="#475569" flexDirection="column" paddingLeft={1} paddingRight={1} style={{ width: "100%" }}>
+      {suggestions.map((command, index) => <text key={command.name} fg={index === selected ? "#f9a8d4" : "#cbd5e1"}>{index === selected ? "> " : "  "}{command.name}</text>)}
       <text fg="#64748b">Up/Down selects  ·  Tab completes</text>
     </box>}
-    <box border borderColor="#38bdf8" paddingLeft={1} paddingRight={1}><text fg="#38bdf8">ASK  </text><input focused placeholder="Describe what you need..." onInput={setValue} onSubmit={submit} value={value} /></box>
+    <box border borderColor="#38bdf8" paddingLeft={1} paddingRight={1} style={{ width: "100%" }}><text fg="#38bdf8">ASK  </text><input focused placeholder="Describe what you need..." onInput={setValue} onSubmit={submit} value={value} /></box>
   </>
 }
 
-function Conversation({ entries }: { entries: Entry[] }) {
-  return <scrollbox style={{ flexGrow: 1 }}>
+function Conversation({ entries, height }: { entries: Entry[]; height: number }) {
+  return <scrollbox style={{ height, width: "100%" }}>
     {entries.map((entry, index) => {
       if (entry.role === "activity") return <text key={index} fg="#64748b">{entry.activity}</text>
       const user = entry.role === "user"
@@ -55,11 +55,14 @@ function Conversation({ entries }: { entries: Entry[] }) {
 }
 
 function App() {
+  const { width, height } = useTerminalDimensions()
   const [state, setState] = useState<State>({ phase: "starting", status: "Starting Symphony..." })
   const [value, setValue] = useState("")
   const [selected, setSelected] = useState(0)
 	const [spinnerFrame, setSpinnerFrame] = useState(0)
   const suggestions = commands.filter((command) => value.startsWith("/") && !value.includes(" ") && command.name.startsWith(value) && command.name !== value)
+  const composerHeight = state.pending ? 2 : 3 + (suggestions.length > 0 ? Math.min(suggestions.length + 2, 7) : 0)
+  const conversationHeight = Math.max(3, height - composerHeight - 7)
 
   const colors = state.theme === "contrast" ? { accent: "#22d3ee", model: "#f0abfc", muted: "#e2e8f0", border: "#94a3b8" } : state.theme === "mono" ? { accent: "#ffffff", model: "#ffffff", muted: "#d4d4d4", border: "#737373" } : { accent: "#38bdf8", model: "#f9a8d4", muted: "#94a3b8", border: "#475569" }
 
@@ -160,9 +163,9 @@ function App() {
 
   if (state.phase === "starting" || state.phase === "error") return <box flexDirection="column" alignItems="center" justifyContent="center" style={{ flexGrow: 1 }}><text fg={state.phase === "error" ? "#f87171" : "#38bdf8"}>SYMPHONY</text><text fg="#94a3b8">{state.status}</text></box>
 
-  return <box flexDirection="column" padding={1} gap={1}>
+  return <box flexDirection="column" padding={1} gap={1} style={{ width, height }}>
     <box flexDirection="row" justifyContent="space-between"><text fg={colors.accent}>SYMPHONY</text><text fg={colors.muted}>{state.provider} / {state.model}  {state.workspace}</text></box>
-    <Conversation entries={state.transcript ?? []} />
+    <Conversation entries={state.transcript ?? []} height={conversationHeight} />
     <box border borderColor={state.pending ? "#fbbf24" : state.status === "WORKING" ? colors.accent : "#334155"} paddingLeft={1} paddingRight={1}><text fg={state.pending ? "#fbbf24" : state.status === "WORKING" ? colors.accent : "#94a3b8"}>{state.pending ?? (state.status === "WORKING" ? `${["⠋", "⠙", "⠹", "⠸"][spinnerFrame]}  WORKING` : state.status)}</text></box>
     {state.pending ? <text fg="#64748b">User input is paused until the action is approved or denied.</text> : <Composer value={value} setValue={setValue} submit={() => { void submit() }} suggestions={suggestions} selected={selected} />}
   </box>
