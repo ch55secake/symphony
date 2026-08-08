@@ -235,7 +235,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 	messages := []agent.Message{}
 	var pending *agent.PendingApproval
 	allowAll := false
-	if err := sendUIState(child.Writer, config, messages, pending, "READY"); err != nil {
+	if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Workspace: config.workspace, Status: "Enter starts chat"}); err != nil {
 		return err
 	}
 	for {
@@ -246,6 +246,11 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 		}
 		switch message.Type {
 		case "app.ready":
+			if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Workspace: config.workspace, Status: "Enter starts chat"}); err != nil {
+				return err
+			}
+			continue
+		case "chat.start":
 			if err := sendUIState(child.Writer, config, messages, pending, "READY"); err != nil {
 				return err
 			}
@@ -398,16 +403,18 @@ func currentWorkspace() (string, error) {
 }
 
 func sendUIState(writer io.Writer, config config, messages []agent.Message, pending *agent.PendingApproval, status string) error {
-	transcript := make([]string, 0, len(messages)*2)
+	transcript := make([]ui.TranscriptEntry, 0, len(messages)*2)
 	for _, message := range messages {
-		if message.Content == "" {
-			continue
-		}
-		label := "You"
+		label, role := "You", "user"
 		if message.Role == agent.RoleAssistant {
-			label = config.model
+			label, role = config.model, "assistant"
 		}
-		transcript = append(transcript, label+": "+message.Content)
+		if message.Content != "" {
+			transcript = append(transcript, ui.TranscriptEntry{Role: role, Label: label, Content: message.Content})
+		}
+		for _, call := range message.ToolCalls {
+			transcript = append(transcript, ui.TranscriptEntry{Role: "activity", Label: config.model, Activity: "Requested " + call.Name})
+		}
 	}
 	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Workspace: config.workspace, Status: status, Transcript: transcript}
 	if pending != nil {

@@ -2,24 +2,65 @@ import { createCliRenderer } from "@opentui/core"
 import { createRoot, useKeyboard } from "@opentui/react"
 import { useEffect, useState } from "react"
 
-type State = { phase: string; provider?: string; model?: string; workspace?: string; status?: string; transcript?: string[]; pending?: string }
+type Entry = { role: "user" | "assistant" | "activity"; label: string; content?: string; activity?: string }
+type State = { phase: "starting" | "welcome" | "chat" | "error"; provider?: string; model?: string; workspace?: string; status?: string; transcript?: Entry[]; pending?: string }
 type ServerMessage = { version: 1; type: "state"; payload: State }
 type ClientMessage = { type: string; prompt?: string; approved?: boolean }
+
+const commands = [
+  { name: "/allow-all", description: "Approve actions for this session" },
+  { name: "/help", description: "Show available commands" },
+  { name: "/model", description: "List or select a model" },
+  { name: "/settings", description: "Show current settings" },
+  { name: "/theme", description: "Select the next-session theme" },
+]
+
+const mark = `███████╗██╗   ██╗███╗   ███╗██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗██╗   ██╗
+██╔════╝╚██╗ ██╔╝████╗ ████║██╔══██╗██║  ██║██╔═══██╗████╗  ██║╚██╗ ██╔╝
+███████╗ ╚████╔╝ ██╔████╔██║██████╔╝███████║██║   ██║██╔██╗ ██║ ╚████╔╝
+╚════██║  ╚██╔╝  ██║╚██╔╝██║██╔═══╝ ██╔══██║██║   ██║██║╚██╗██║  ╚██╔╝
+███████║   ██║   ██║ ╚═╝ ██║██║     ██║  ██║╚██████╔╝██║ ╚████║   ██║
+╚══════╝   ╚═╝   ╚═╝     ╚═╝╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═══╝  ╚═══╝   ╚═╝`
 
 const rpcIn = Number(process.env.SYMPHONY_RPC_IN_FD)
 const rpcOut = Number(process.env.SYMPHONY_RPC_OUT_FD)
 const input = Number.isInteger(rpcIn) ? Bun.file(rpcIn) : null
 const output = Number.isInteger(rpcOut) ? Bun.file(rpcOut) : null
 
-function send(message: ClientMessage) {
-  if (output) Bun.write(output, JSON.stringify({ version: 1, type: message.type, payload: { prompt: message.prompt, approved: message.approved } }) + "\n")
+async function send(message: ClientMessage) {
+  if (output) await Bun.write(output, JSON.stringify({ version: 1, type: message.type, payload: { prompt: message.prompt, approved: message.approved } }) + "\n")
+}
+
+function Composer({ value, setValue, submit, suggestions, selected }: { value: string; setValue: (value: string) => void; submit: () => void; suggestions: typeof commands; selected: number }) {
+  return <>
+    {suggestions.length > 0 && <box border borderColor="#475569" flexDirection="column" paddingLeft={1} paddingRight={1}>
+      {suggestions.map((command, index) => <box key={command.name} flexDirection="row" justifyContent="space-between"><text fg={index === selected ? "#f9a8d4" : "#cbd5e1"}>{index === selected ? "> " : "  "}{command.name}</text><text fg="#64748b">{command.description}</text></box>)}
+      <text fg="#64748b">Up/Down selects  ·  Tab completes</text>
+    </box>}
+    <box border borderColor="#38bdf8" paddingLeft={1} paddingRight={1}><text fg="#38bdf8">ASK  </text><input focused placeholder="Describe what you need..." onInput={setValue} onSubmit={submit} value={value} /></box>
+  </>
+}
+
+function Conversation({ entries }: { entries: Entry[] }) {
+  return <scrollbox style={{ flexGrow: 1 }}>
+    {entries.map((entry, index) => {
+      if (entry.role === "activity") return <text key={index} fg="#64748b">{entry.activity}</text>
+      const user = entry.role === "user"
+      return <box key={index} border borderColor={user ? "#334155" : "#3b82f6"} flexDirection="column" paddingLeft={1} paddingRight={1} marginBottom={1}>
+        <text fg={user ? "#93c5fd" : "#f9a8d4"}>{entry.label}</text>
+        <text fg="#e2e8f0">{entry.content}</text>
+      </box>
+    })}
+  </scrollbox>
 }
 
 function App() {
   const [state, setState] = useState<State>({ phase: "starting", status: "Starting Symphony..." })
   const [value, setValue] = useState("")
-	const suggestions = ["/allow-all", "/help", "/model", "/settings", "/theme"].filter((command) => value.startsWith("/") && !value.includes(" ") && command.startsWith(value) && command !== value)
+  const [selected, setSelected] = useState(0)
+  const suggestions = commands.filter((command) => value.startsWith("/") && !value.includes(" ") && command.name.startsWith(value) && command.name !== value)
 
+  useEffect(() => setSelected(0), [value])
   useEffect(() => {
     if (!input) return
     const reader = input.stream().pipeThrough(new TextDecoderStream()).getReader()
@@ -32,27 +73,53 @@ function App() {
         const lines = buffer.split("\n")
         buffer = lines.pop() ?? ""
         for (const line of lines) {
-          try { const message = JSON.parse(line) as ServerMessage; if (message.version === 1 && message.type === "state") setState(message.payload) } catch { /* Ignore malformed backend messages. */ }
+          try {
+            const message = JSON.parse(line) as ServerMessage
+            if (message.version === 1 && message.type === "state") setState(message.payload)
+          } catch { /* Ignore malformed backend messages. */ }
         }
       }
     })()
   }, [])
 
   useKeyboard((key) => {
-    if (key.ctrl && key.name === "q") send({ type: "app.quit" })
-    if (state.pending && key.name === "y") send({ type: "approval.resolve", approved: true })
-    if (state.pending && (key.name === "n" || key.name === "escape")) send({ type: "approval.resolve", approved: false })
+    if (key.ctrl && key.name === "q") void send({ type: "app.quit" })
+    if (state.pending && key.name === "y") void send({ type: "approval.resolve", approved: true })
+    if (state.pending && (key.name === "n" || key.name === "escape")) void send({ type: "approval.resolve", approved: false })
+    if (suggestions.length === 0) return
+    if (key.name === "up") setSelected((index) => Math.max(0, index - 1))
+    if (key.name === "down") setSelected((index) => Math.min(suggestions.length - 1, index + 1))
+    if (key.name === "tab") setValue(suggestions[selected].name)
   })
 
+  const submit = async () => {
+    if (state.phase === "welcome") {
+      await send({ type: "chat.start" })
+      if (value.trim()) await send({ type: "prompt.submit", prompt: value })
+      setValue("")
+      return
+    }
+    if (value.trim()) await send({ type: "prompt.submit", prompt: value })
+    setValue("")
+  }
+
+  if (state.phase === "welcome") return <box flexDirection="column" alignItems="center" justifyContent="center" style={{ flexGrow: 1 }} padding={1} gap={1}>
+    <text fg="#38bdf8">{mark}</text>
+    <text fg="#94a3b8">{state.provider} / {state.model}  |  {state.workspace}</text>
+    <box style={{ width: "80%" }}><Composer value={value} setValue={setValue} submit={() => { void submit() }} suggestions={suggestions} selected={selected} /></box>
+    <text fg="#64748b">Enter starts chat  ·  Ctrl+Q quits</text>
+  </box>
+
+  if (state.phase === "starting" || state.phase === "error") return <box flexDirection="column" alignItems="center" justifyContent="center" style={{ flexGrow: 1 }}><text fg={state.phase === "error" ? "#f87171" : "#38bdf8"}>SYMPHONY</text><text fg="#94a3b8">{state.status}</text></box>
+
   return <box flexDirection="column" padding={1} gap={1}>
-    <box flexDirection="row" justifyContent="space-between"><text fg="#7dd3fc">SYMPHONY</text><text fg="#94a3b8">{state.provider} / {state.model}  {state.workspace}</text></box>
-    <scrollbox focused style={{ flexGrow: 1 }}>{(state.transcript ?? []).map((line, index) => <text key={index}>{line}</text>)}</scrollbox>
-    <text fg={state.pending ? "#fbbf24" : "#94a3b8"}>{state.pending ?? state.status}</text>
-    {suggestions.length > 0 && <box border borderColor="#64748b" flexDirection="column" paddingLeft={1} paddingRight={1}>{suggestions.map((command) => <text key={command} fg="#cbd5e1">{command}</text>)}<text fg="#64748b">Tab completes</text></box>}
-    <box border borderColor="#7dd3fc" paddingLeft={1} paddingRight={1}><input focused placeholder="Describe what you need..." onInput={setValue} onSubmit={() => { send({ type: "prompt.submit", prompt: value }); setValue("") }} value={value} /></box>
+    <box flexDirection="row" justifyContent="space-between"><text fg="#38bdf8">SYMPHONY</text><text fg="#94a3b8">{state.provider} / {state.model}  {state.workspace}</text></box>
+    <Conversation entries={state.transcript ?? []} />
+    <box border borderColor={state.pending ? "#fbbf24" : "#334155"} paddingLeft={1} paddingRight={1}><text fg={state.pending ? "#fbbf24" : "#94a3b8"}>{state.pending ?? state.status}</text></box>
+    <Composer value={value} setValue={setValue} submit={() => { void submit() }} suggestions={suggestions} selected={selected} />
   </box>
 }
 
 const renderer = await createCliRenderer({ exitOnCtrlC: false })
 createRoot(renderer).render(<App />)
-send({ type: "app.ready" })
+void send({ type: "app.ready" })
