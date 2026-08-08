@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/ch55secake/symphony/internal/agent"
-	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -18,10 +19,11 @@ var ErrCanceled = errors.New("TUI canceled")
 
 // Config identifies the session displayed by the TUI.
 type Config struct {
-	Provider  string
-	Model     string
-	Workspace string
-	SessionID string
+	Provider      string
+	Model         string
+	Workspace     string
+	SessionID     string
+	InitialPrompt string
 }
 
 // Runner executes agent turns and resolves side-effect approvals.
@@ -60,7 +62,7 @@ type model struct {
 	cancel   context.CancelFunc
 	config   Config
 	runner   Runner
-	input    textarea.Model
+	input    textinput.Model
 	viewport viewport.Model
 	messages []agent.Message
 	pending  *agent.PendingApproval
@@ -76,13 +78,16 @@ type turnResultMsg struct {
 	err    error
 }
 
+type initialSubmitMsg struct{}
+
 func newModel(ctx context.Context, cancel context.CancelFunc, config Config, runner Runner) model {
-	input := textarea.New()
-	input.Placeholder = "Ask Symphony to work in this workspace..."
-	input.Prompt = "> "
-	input.ShowLineNumbers = false
+	input := textinput.New()
+	input.Placeholder = "Describe what you need..."
+	input.Prompt = ""
+	input.TextStyle = commandTextStyle
+	input.PlaceholderStyle = subtleStyle
+	input.SetValue(config.InitialPrompt)
 	input.CharLimit = 32 << 10
-	input.SetHeight(4)
 	input.Focus()
 	return model{
 		ctx:      ctx,
@@ -95,6 +100,9 @@ func newModel(ctx context.Context, cancel context.CancelFunc, config Config, run
 }
 
 func (m model) Init() tea.Cmd {
+	if strings.TrimSpace(m.config.InitialPrompt) != "" {
+		return func() tea.Msg { return initialSubmitMsg{} }
+	}
 	return nil
 }
 
@@ -102,9 +110,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.input.SetWidth(max(20, msg.Width-4))
+		m.input.Width = max(20, msg.Width-4)
 		m.viewport.Width = max(20, msg.Width-4)
-		m.viewport.Height = max(3, msg.Height-11)
+		m.viewport.Height = max(3, msg.Height-10)
 		m.refreshConversation()
 		return m, nil
 	case tea.KeyMsg:
@@ -144,6 +152,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pending = msg.result.Pending
 		m.refreshConversation()
 		return m, nil
+	case initialSubmitMsg:
+		return m.submit()
 	}
 
 	if m.busy {
@@ -194,7 +204,7 @@ func (m *model) refreshConversation() {
 			lines = append(lines, userStyle.Render("You"), message.Content)
 		case agent.RoleAssistant:
 			if message.Content != "" {
-				lines = append(lines, assistantStyle.Render("Symphony"), message.Content)
+				lines = append(lines, assistantStyle.Render(m.config.Model), message.Content)
 			}
 			for _, call := range message.ToolCalls {
 				lines = append(lines, activityStyle.Render(fmt.Sprintf("Requested %s", call.Name)))
@@ -209,10 +219,10 @@ func (m model) View() string {
 	if m.width == 0 {
 		return "Loading Symphony..."
 	}
-	header := titleStyle.Render("SYMPHONY") + "  " + subtleStyle.Render(fmt.Sprintf("%s / %s", m.config.Provider, m.config.Model)) + "\n" + subtleStyle.Render(m.config.Workspace+"  |  session "+m.config.SessionID)
-	status := "Ready. Enter sends, PgUp/PgDn scrolls, Ctrl+Q quits."
+	header := titleStyle.Render("SYMPHONY") + "  " + subtleStyle.Render(fmt.Sprintf("%s / %s", m.config.Provider, m.config.Model)) + "  " + subtleStyle.Render(filepath.Base(m.config.Workspace))
+	status := subtleStyle.Render("READY")
 	if m.busy {
-		status = "Working..."
+		status = activityStyle.Render("WORKING")
 	}
 	if m.err != nil {
 		status = errorStyle.Render("Error: " + m.err.Error())
@@ -220,16 +230,19 @@ func (m model) View() string {
 	if m.pending != nil {
 		status = approvalStyle.Render(fmt.Sprintf("Approval required: %s\nHash: %s\n[y] approve  [n/Esc] deny", m.pending.Summary, m.pending.Hash))
 	}
-	return header + "\n\n" + m.viewport.View() + "\n\n" + status + "\n" + inputStyle.Render(m.input.View())
+	composer := composerStyle.Width(max(20, m.width-5)).Render(commandPromptStyle.Render("ASK  ") + m.input.View())
+	return header + "\n\n" + m.viewport.View() + "\n" + status + "\n" + composer
 }
 
 var (
-	titleStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
-	subtleStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	userStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
-	assistantStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	activityStyle  = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("244"))
-	approvalStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	inputStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("69")).Padding(0, 1)
+	titleStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
+	subtleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	userStyle          = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	assistantStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	activityStyle      = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("244"))
+	approvalStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	errorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	commandPromptStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
+	commandTextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	composerStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("69")).Padding(0, 1)
 )

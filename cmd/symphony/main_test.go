@@ -279,6 +279,23 @@ func TestConfigFromTUIConfiguresOpenCodeGoTransports(t *testing.T) {
 	}
 }
 
+func TestSavedSetupRequiresCompleteProviderConnection(t *testing.T) {
+	settings := appconfig.Settings{Provider: "opencode", Model: " kimi-test ", OpenCodeAPIKey: " test-key "}
+	saved, ok := savedSetup(settings, "/workspace")
+	if !ok || saved.Provider != "opencode" || saved.Model != "kimi-test" || saved.APIKey != "test-key" || saved.Workspace != "/workspace" {
+		t.Fatalf("savedSetup() = %#v, %t", saved, ok)
+	}
+	for _, settings := range []appconfig.Settings{
+		{Provider: "opencode", Model: "model"},
+		{Provider: "opencode", OpenCodeAPIKey: "key"},
+		{Model: "model", OpenCodeAPIKey: "key"},
+	} {
+		if _, ok := savedSetup(settings, "/workspace"); ok {
+			t.Fatalf("savedSetup(%#v) = true", settings)
+		}
+	}
+}
+
 func TestParseConfigUsesFileEnvironmentAndFlagPrecedence(t *testing.T) {
 	settings := appconfig.Settings{
 		Provider:     "openai",
