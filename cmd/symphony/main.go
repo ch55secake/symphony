@@ -111,26 +111,33 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 	if err != nil {
 		return err
 	}
-	selected, err := tui.Select(ctx, tui.SetupConfig{
-		Provider:  settings.Provider,
-		Model:     settings.Model,
-		Workspace: workspace,
-		APIKey:    providerAPIKey(settings.Provider, settings),
-	}, func(ctx context.Context, provider, apiKey string) ([]string, error) {
-		return models.List(ctx, models.Config{Provider: provider, APIKey: apiKey})
-	})
-	if errors.Is(err, tui.ErrCanceled) {
-		return nil
+	selected, saved := savedSetup(settings, workspace)
+	var config config
+	if saved {
+		config, err = configFromTUI(selected, settings)
 	}
-	if err != nil {
-		return err
-	}
-	config, err := configFromTUI(selected, settings)
-	if err != nil {
-		return err
-	}
-	if err := appconfig.SaveConnection(selected.Provider, selected.APIKey, selected.Model); err != nil {
-		return err
+	if !saved || err != nil {
+		selected, err = tui.Select(ctx, tui.SetupConfig{
+			Provider:  settings.Provider,
+			Model:     settings.Model,
+			Workspace: workspace,
+			APIKey:    providerAPIKey(settings.Provider, settings),
+		}, func(ctx context.Context, provider, apiKey string) ([]string, error) {
+			return models.List(ctx, models.Config{Provider: provider, APIKey: apiKey})
+		})
+		if errors.Is(err, tui.ErrCanceled) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		config, err = configFromTUI(selected, settings)
+		if err != nil {
+			return err
+		}
+		if err := appconfig.SaveConnection(selected.Provider, selected.APIKey, selected.Model); err != nil {
+			return err
+		}
 	}
 	runtime, err := factory(config)
 	if err != nil {
@@ -157,6 +164,16 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 		return err
 	}
 	return runtime.sessions.Finish(ctx, handle, actor, "quit")
+}
+
+func savedSetup(settings appconfig.Settings, workspace string) (tui.SetupConfig, bool) {
+	provider := settings.Provider
+	model := strings.TrimSpace(settings.Model)
+	apiKey := strings.TrimSpace(providerAPIKey(provider, settings))
+	if provider == "" || model == "" || apiKey == "" {
+		return tui.SetupConfig{}, false
+	}
+	return tui.SetupConfig{Provider: provider, Model: model, Workspace: workspace, APIKey: apiKey}, true
 }
 
 type tuiRunner struct {
