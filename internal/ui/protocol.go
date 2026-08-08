@@ -24,10 +24,13 @@ type State struct {
 	Phase      string            `json:"phase"`
 	Provider   string            `json:"provider,omitempty"`
 	Model      string            `json:"model,omitempty"`
+	Theme      string            `json:"theme,omitempty"`
 	Workspace  string            `json:"workspace,omitempty"`
 	Status     string            `json:"status,omitempty"`
 	Transcript []TranscriptEntry `json:"transcript,omitempty"`
 	Pending    string            `json:"pending,omitempty"`
+	Selection  string            `json:"selection,omitempty"`
+	Options    []string          `json:"options,omitempty"`
 }
 
 // TranscriptEntry is safe display metadata for a conversation message.

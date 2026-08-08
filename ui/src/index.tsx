@@ -3,9 +3,9 @@ import { createRoot, useKeyboard } from "@opentui/react"
 import { useEffect, useState } from "react"
 
 type Entry = { role: "user" | "assistant" | "activity"; label: string; content?: string; activity?: string }
-type State = { phase: "starting" | "welcome" | "chat" | "error"; provider?: string; model?: string; workspace?: string; status?: string; transcript?: Entry[]; pending?: string }
+type State = { phase: "starting" | "welcome" | "chat" | "error" | "select" | "confirm" | "settings"; provider?: string; model?: string; theme?: string; workspace?: string; status?: string; transcript?: Entry[]; pending?: string; selection?: string; options?: string[] }
 type ServerMessage = { version: 1; type: "state"; payload: State }
-type ClientMessage = { type: string; prompt?: string; approved?: boolean }
+type ClientMessage = { type: string; prompt?: string; approved?: boolean; selection?: string; value?: string }
 
 const commands = [
   { name: "/allow-all", description: "Approve actions for this session" },
@@ -28,7 +28,7 @@ const input = Number.isInteger(rpcIn) ? Bun.file(rpcIn) : null
 const output = Number.isInteger(rpcOut) ? Bun.file(rpcOut) : null
 
 async function send(message: ClientMessage) {
-  if (output) await Bun.write(output, JSON.stringify({ version: 1, type: message.type, payload: { prompt: message.prompt, approved: message.approved } }) + "\n")
+  if (output) await Bun.write(output, JSON.stringify({ version: 1, type: message.type, payload: { prompt: message.prompt, approved: message.approved, selection: message.selection, value: message.value } }) + "\n")
 }
 
 function Composer({ value, setValue, submit, suggestions, selected }: { value: string; setValue: (value: string) => void; submit: () => void; suggestions: typeof commands; selected: number }) {
@@ -60,7 +60,10 @@ function App() {
   const [selected, setSelected] = useState(0)
   const suggestions = commands.filter((command) => value.startsWith("/") && !value.includes(" ") && command.name.startsWith(value) && command.name !== value)
 
+  const colors = state.theme === "contrast" ? { accent: "#22d3ee", model: "#f0abfc", muted: "#e2e8f0", border: "#94a3b8" } : state.theme === "mono" ? { accent: "#ffffff", model: "#ffffff", muted: "#d4d4d4", border: "#737373" } : { accent: "#38bdf8", model: "#f9a8d4", muted: "#94a3b8", border: "#475569" }
+
   useEffect(() => setSelected(0), [value])
+  useEffect(() => setSelected(0), [state.phase, state.selection])
   useEffect(() => {
     if (!input) return
     const reader = input.stream().pipeThrough(new TextDecoderStream()).getReader()
@@ -86,6 +89,23 @@ function App() {
     if (key.ctrl && key.name === "q") void send({ type: "app.quit" })
     if (state.pending && key.name === "y") void send({ type: "approval.resolve", approved: true })
     if (state.pending && (key.name === "n" || key.name === "escape")) void send({ type: "approval.resolve", approved: false })
+    if (state.phase === "confirm") {
+      if (key.name === "y") void send({ type: "allow-all.confirm", approved: true })
+      if (key.name === "n" || key.name === "escape") void send({ type: "allow-all.confirm", approved: false })
+      return
+    }
+    if (state.phase === "settings" && (key.name === "escape" || key.name === "return")) {
+      void send({ type: "chat.start" })
+      return
+    }
+    if (state.phase === "select") {
+      const options = state.options ?? []
+      if (key.name === "up") setSelected((index) => Math.max(0, index - 1))
+      if (key.name === "down") setSelected((index) => Math.min(options.length - 1, index + 1))
+      if (key.name === "return" && options[selected]) void send({ type: "selection.submit", selection: state.selection, value: options[selected] })
+      if (key.name === "escape") void send({ type: "chat.start" })
+      return
+    }
     if (suggestions.length === 0) return
     if (key.name === "up") setSelected((index) => Math.max(0, index - 1))
     if (key.name === "down") setSelected((index) => Math.min(suggestions.length - 1, index + 1))
@@ -104,16 +124,38 @@ function App() {
   }
 
   if (state.phase === "welcome") return <box flexDirection="column" alignItems="center" justifyContent="center" style={{ flexGrow: 1 }} padding={1} gap={1}>
-    <text fg="#38bdf8">{mark}</text>
-    <text fg="#94a3b8">{state.provider} / {state.model}  |  {state.workspace}</text>
+    <text fg={colors.accent}>{mark}</text>
+    <text fg={colors.muted}>{state.provider} / {state.model}  |  {state.workspace}</text>
     <box style={{ width: "80%" }}><Composer value={value} setValue={setValue} submit={() => { void submit() }} suggestions={suggestions} selected={selected} /></box>
-    <text fg="#64748b">Enter starts chat  ·  Ctrl+Q quits</text>
+    <text fg={colors.muted}>Enter starts chat  ·  Ctrl+Q quits</text>
+  </box>
+
+  if (state.phase === "select") return <box flexDirection="column" alignItems="center" justifyContent="center" style={{ flexGrow: 1 }} padding={1} gap={1}>
+    <text fg={colors.accent}>SELECT {state.selection?.toUpperCase()}</text>
+    <box border borderColor={colors.border} flexDirection="column" paddingLeft={1} paddingRight={1} style={{ width: "70%" }}>
+      {(state.options ?? []).map((option, index) => <text key={option} fg={index === selected ? colors.model : colors.muted}>{index === selected ? "> " : "  "}{option}</text>)}
+    </box>
+    <text fg="#64748b">Up/Down selects  ·  Enter applies  ·  Esc cancels</text>
+  </box>
+
+  if (state.phase === "confirm") return <box flexDirection="column" alignItems="center" justifyContent="center" style={{ flexGrow: 1 }} padding={1} gap={1}>
+    <box border borderColor="#fbbf24" paddingLeft={1} paddingRight={1}><text fg="#fbbf24">{state.status}</text></box>
+    <text fg="#94a3b8">[y] enable  ·  [n/Esc] cancel</text>
+  </box>
+
+  if (state.phase === "settings") return <box flexDirection="column" alignItems="center" justifyContent="center" style={{ flexGrow: 1 }} padding={1} gap={1}>
+    <text fg={colors.accent}>SETTINGS</text>
+    <box border borderColor={colors.border} flexDirection="column" paddingLeft={1} paddingRight={1}>
+      <text fg={colors.muted}>Provider  {state.provider}</text><text fg={colors.muted}>Model     {state.model}</text><text fg={colors.muted}>Theme     {state.theme}</text>
+      <text fg="#64748b">/model changes model  ·  /theme changes theme  ·  /allow-all changes approval</text>
+    </box>
+    <text fg="#64748b">Enter or Esc returns to chat</text>
   </box>
 
   if (state.phase === "starting" || state.phase === "error") return <box flexDirection="column" alignItems="center" justifyContent="center" style={{ flexGrow: 1 }}><text fg={state.phase === "error" ? "#f87171" : "#38bdf8"}>SYMPHONY</text><text fg="#94a3b8">{state.status}</text></box>
 
   return <box flexDirection="column" padding={1} gap={1}>
-    <box flexDirection="row" justifyContent="space-between"><text fg="#38bdf8">SYMPHONY</text><text fg="#94a3b8">{state.provider} / {state.model}  {state.workspace}</text></box>
+    <box flexDirection="row" justifyContent="space-between"><text fg={colors.accent}>SYMPHONY</text><text fg={colors.muted}>{state.provider} / {state.model}  {state.workspace}</text></box>
     <Conversation entries={state.transcript ?? []} />
     <box border borderColor={state.pending ? "#fbbf24" : "#334155"} paddingLeft={1} paddingRight={1}><text fg={state.pending ? "#fbbf24" : "#94a3b8"}>{state.pending ?? state.status}</text></box>
     <Composer value={value} setValue={setValue} submit={() => { void submit() }} suggestions={suggestions} selected={selected} />

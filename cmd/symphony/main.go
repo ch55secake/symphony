@@ -264,7 +264,35 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			if err := json.Unmarshal(message.Payload, &request); err != nil || strings.TrimSpace(request.Prompt) == "" || pending != nil {
 				continue
 			}
-			if strings.HasPrefix(strings.TrimSpace(request.Prompt), "/") {
+			command := strings.TrimSpace(request.Prompt)
+			switch command {
+			case "/model":
+				available, err := listUIModels(ctx, runtime, handle, config)
+				if err != nil {
+					_ = sendUIState(child.Writer, config, messages, pending, displayUIError(err))
+					continue
+				}
+				if err := ui.SendState(child.Writer, ui.State{Phase: "select", Selection: "model", Options: available, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a model"}); err != nil {
+					return err
+				}
+				continue
+			case "/theme":
+				if err := ui.SendState(child.Writer, ui.State{Phase: "select", Selection: "theme", Options: []string{"default", "contrast", "mono"}, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a theme"}); err != nil {
+					return err
+				}
+				continue
+			case "/allow-all", "/allow-all on":
+				if err := ui.SendState(child.Writer, ui.State{Phase: "confirm", Selection: "allow-all", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Allow all workspace writes and commands for this session?"}); err != nil {
+					return err
+				}
+				continue
+			case "/settings":
+				if err := ui.SendState(child.Writer, ui.State{Phase: "settings", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "[/model] model  [/theme] theme  [/allow-all] approval"}); err != nil {
+					return err
+				}
+				continue
+			}
+			if strings.HasPrefix(command, "/") {
 				status, updatedAllowAll, handled := handleUICommand(ctx, runtime, handle, &config, request.Prompt, allowAll)
 				if handled {
 					allowAll = updatedAllowAll
@@ -290,6 +318,37 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				}
 				messages, pending = result.Messages, result.Pending
 			}
+		case "selection.submit":
+			var request struct {
+				Selection string `json:"selection"`
+				Value     string `json:"value"`
+			}
+			if err := json.Unmarshal(message.Payload, &request); err != nil || request.Value == "" {
+				continue
+			}
+			command := "/" + request.Selection + " " + request.Value
+			status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, command, allowAll)
+			allowAll = updatedAllowAll
+			if err := sendUIState(child.Writer, config, messages, pending, status); err != nil {
+				return err
+			}
+			continue
+		case "allow-all.confirm":
+			var request struct {
+				Approved bool `json:"approved"`
+			}
+			if err := json.Unmarshal(message.Payload, &request); err != nil || !request.Approved {
+				if err := sendUIState(child.Writer, config, messages, pending, "Allow all canceled"); err != nil {
+					return err
+				}
+				continue
+			}
+			status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, "/allow-all on", allowAll)
+			allowAll = updatedAllowAll
+			if err := sendUIState(child.Writer, config, messages, pending, status); err != nil {
+				return err
+			}
+			continue
 		case "approval.resolve":
 			var request struct {
 				Approved bool `json:"approved"`
@@ -314,6 +373,29 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			return err
 		}
 	}
+}
+
+func listUIModels(ctx context.Context, runtime *runtime, handle *session.Handle, config config) ([]string, error) {
+	if err := runtime.sessions.Record(ctx, handle, events.ModelListRequested, actor, events.ModelListRequestedPayload{Provider: config.provider}); err != nil {
+		return nil, err
+	}
+	available, err := models.List(ctx, models.Config{Provider: config.provider, APIKey: config.apiKey})
+	if err != nil {
+		_ = runtime.sessions.Record(context.WithoutCancel(ctx), handle, events.ModelListFailed, actor, events.ModelListFailedPayload{Provider: config.provider, Code: "catalog_failed"})
+		return nil, err
+	}
+	if err := runtime.sessions.Record(ctx, handle, events.ModelListCompleted, actor, events.ModelListCompletedPayload{Provider: config.provider, Count: len(available)}); err != nil {
+		return nil, err
+	}
+	return available, nil
+}
+
+func activeTheme() string {
+	settings, err := appconfig.Load()
+	if err != nil || settings.Theme == "" {
+		return "default"
+	}
+	return settings.Theme
 }
 
 func handleUICommand(ctx context.Context, runtime *runtime, handle *session.Handle, config *config, input string, allowAll bool) (string, bool, bool) {
@@ -416,7 +498,7 @@ func sendUIState(writer io.Writer, config config, messages []agent.Message, pend
 			transcript = append(transcript, ui.TranscriptEntry{Role: "activity", Label: config.model, Activity: "Requested " + call.Name})
 		}
 	}
-	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Workspace: config.workspace, Status: status, Transcript: transcript}
+	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Transcript: transcript}
 	if pending != nil {
 		state.Pending = "Approval required: " + pending.Summary + "\nHash: " + pending.Hash + "\n[y] approve  [n] deny"
 	}
