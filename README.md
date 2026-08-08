@@ -65,3 +65,73 @@ Writes use a durable request, approval, and execution flow. `file.write.requeste
 records only the proposed path, byte count, and content hash. A separate
 `file.write.approved` event is required before execution validates the supplied content
 against that hash and atomically replaces the target. Raw write content is never persisted.
+
+## Workspace Commands
+
+Commands use the same durable request and approval flow. They accept an executable and
+argument list, never an implicit shell string, and may only use a workspace-relative
+working directory. Runtime stdout and stderr are bounded and returned to the caller;
+events retain only output hashes, byte counts, truncation state, exit code, and duration.
+
+## Agent Turns
+
+`internal/agent` persists user messages and model-request intent before contacting a
+provider, then persists the model completion or failure. It exposes a provider-neutral
+completion contract so OpenAI and Anthropic adapters can share the same audited turn path.
+
+## OpenAI Provider
+
+`internal/providers/openai` implements the non-streaming OpenAI Responses API. Configure
+its `Config.APIKey` from `OPENAI_API_KEY` at process composition time; the provider sends
+`store: false` so OpenAI does not become an additional conversation store. API keys and
+response error bodies are never persisted by Symphony.
+
+## Anthropic Provider
+
+`internal/providers/anthropic` implements the non-streaming Anthropic Messages API.
+Configure its `Config.APIKey` from `ANTHROPIC_API_KEY` at process composition time. API
+keys and Anthropic response error bodies are never persisted by Symphony.
+
+
+## Read-Only Tool Loop
+
+`internal/agent.Loop` follows provider tool calls with the native `read_file` tool.
+It persists metadata-only tool results before each follow-up provider request, forwards
+bounded file content only in memory, and stops on unknown tools, tool failures, provider
+errors, cancellation, or its configured tool-round limit.
+
+## Write Approval Bridge
+
+The `write_file` tool pauses `agent.Loop` after persisting a write request and generic
+approval request. Callers must explicitly approve or deny the returned pending action;
+approval executes the hash-bound write and resumes the provider loop, while denial resumes
+with an error tool result and performs no filesystem mutation.
+
+## Command Approval Bridge
+
+The `run_command` tool likewise pauses `agent.Loop` after recording a structured command
+request and generic approval request. Approval runs the hash-bound command and provides its
+bounded output only to the resumed provider loop; command output is never persisted.
+
+## CLI Runner
+
+Run an audited agent session with one provider credential in the environment:
+
+```sh
+KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENAI_API_KEY='...' \
+  go run ./cmd/symphony run --provider openai --model gpt-5.2 --workspace . "Read README.md"
+```
+
+Anthropic uses `ANTHROPIC_API_KEY` and `--provider anthropic`. The runner prints the final
+completion. Write and command requests stop at a terminal prompt showing only safe action
+metadata and a hash; enter `y` or `yes` to approve, or any other input to deny.
+
+## Session Replay
+
+Each run prints its session ID. Replay that session's recorded audit timeline as JSON Lines
+without invoking a provider or repeating side effects:
+
+```sh
+KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' \
+  go run ./cmd/symphony replay SESSION_ID
+```

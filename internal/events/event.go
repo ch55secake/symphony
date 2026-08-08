@@ -27,6 +27,18 @@ const (
 	FileWriteApproved  Type = "file.write.approved"
 	FileWriteCompleted Type = "file.write.completed"
 	FileWriteFailed    Type = "file.write.failed"
+	CommandRequested   Type = "command.requested"
+	CommandApproved    Type = "command.approved"
+	CommandCompleted   Type = "command.completed"
+	CommandFailed      Type = "command.failed"
+	UserMessage        Type = "user.message"
+	ModelRequested     Type = "model.requested"
+	ModelCompleted     Type = "model.completed"
+	ModelFailed        Type = "model.failed"
+	ToolResult         Type = "tool.result"
+	ApprovalRequested  Type = "approval.requested"
+	ApprovalGranted    Type = "approval.granted"
+	ApprovalDenied     Type = "approval.denied"
 	PolicyRedacted     Type = "policy.redacted"
 )
 

@@ -21,10 +21,11 @@ type Policy struct {
 func DefaultPolicy() Policy {
 	return Policy{
 		KeyPatterns: []*regexp.Regexp{
-			regexp.MustCompile(`(?i)(api[_-]?key|authorization|password|secret|token|credential)`),
+			regexp.MustCompile(`(?i)(?:^|[_-])(api[_-]?key|authorization|password|secret|token|credential)(?:$|[_-])`),
 		},
 		ValuePatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)bearer\s+[a-z0-9._-]+`),
+			regexp.MustCompile(`(?i)(?:^|--?)(?:api[_-]?key|authorization|password|secret|token|credential)=\S+`),
 		},
 	}
 }
@@ -65,6 +66,15 @@ func (p Policy) redact(value *any, path string, redactions *[]events.Redaction) 
 		}
 	case []any:
 		for index, child := range current {
+			if option, ok := child.(string); ok && isSensitiveOption(option) {
+				current[index] = RedactedValue
+				*redactions = append(*redactions, events.Redaction{Path: fmt.Sprintf("%s[%d]", path, index), Reason: "sensitive option"})
+				if !strings.Contains(option, "=") && index+1 < len(current) {
+					current[index+1] = RedactedValue
+					*redactions = append(*redactions, events.Redaction{Path: fmt.Sprintf("%s[%d]", path, index+1), Reason: "sensitive option value"})
+				}
+				continue
+			}
 			p.redact(&child, fmt.Sprintf("%s[%d]", path, index), redactions)
 			current[index] = child
 		}
@@ -74,6 +84,10 @@ func (p Policy) redact(value *any, path string, redactions *[]events.Redaction) 
 			*redactions = append(*redactions, events.Redaction{Path: path, Reason: "sensitive value"})
 		}
 	}
+}
+
+func isSensitiveOption(value string) bool {
+	return regexp.MustCompile(`(?i)^--?(?:api[_-]?key|authorization|password|secret|token|credential)(?:=\S+)?$`).MatchString(strings.TrimSpace(value))
 }
 
 func (p Policy) matchesKey(key string) bool {
