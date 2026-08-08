@@ -158,7 +158,7 @@ function App() {
     <box flexDirection="row" justifyContent="space-between"><text fg={colors.accent}>SYMPHONY</text><text fg={colors.muted}>{state.provider} / {state.model}  {state.workspace}</text></box>
     <Conversation entries={state.transcript ?? []} />
     <box border borderColor={state.pending ? "#fbbf24" : "#334155"} paddingLeft={1} paddingRight={1}><text fg={state.pending ? "#fbbf24" : "#94a3b8"}>{state.pending ?? state.status}</text></box>
-    <Composer value={value} setValue={setValue} submit={() => { void submit() }} suggestions={suggestions} selected={selected} />
+    {state.pending ? <text fg="#64748b">User input is paused until the action is approved or denied.</text> : <Composer value={value} setValue={setValue} submit={() => { void submit() }} suggestions={suggestions} selected={selected} />}
   </box>
 }
 
