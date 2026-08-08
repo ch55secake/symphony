@@ -27,6 +27,7 @@ import (
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/store/kurrentdb"
 	"github.com/ch55secake/symphony/internal/tui"
+	"github.com/ch55secake/symphony/internal/ui"
 	"github.com/ch55secake/symphony/internal/workspace"
 	"github.com/google/uuid"
 )
@@ -93,6 +94,18 @@ func execute(ctx context.Context, args []string, input io.Reader, output io.Writ
 }
 
 func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentStarter) error {
+	executable := strings.TrimSpace(os.Getenv("SYMPHONY_UI_EXECUTABLE"))
+	if executable == "" {
+		var err error
+		executable, err = ui.Extract()
+		if err != nil {
+			return runBubbleTUI(ctx, factory, startKurrent)
+		}
+	}
+	return runOpenTUI(ctx, factory, startKurrent, executable)
+}
+
+func runBubbleTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentStarter) error {
 	workspace, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
@@ -109,6 +122,13 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 	}
 	settings, err := appconfig.Load()
 	if err != nil {
+		return err
+	}
+	theme := settings.Theme
+	if theme == "" {
+		theme = "default"
+	}
+	if err := tui.SetTheme(theme); err != nil {
 		return err
 	}
 	selected, saved := savedSetup(settings, workspace)
@@ -162,7 +182,7 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 		Workspace:     config.workspace,
 		SessionID:     handle.SessionID.String(),
 		InitialPrompt: initialPrompt,
-	}, tuiRunner{runtime: runtime, handle: handle, config: config})
+	}, &tuiRunner{runtime: runtime, handle: handle, config: config})
 	if err != nil {
 		reason := failureReason(ctx)
 		if errors.Is(err, tui.ErrCanceled) {
@@ -173,6 +193,230 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 	}
 	return runtime.sessions.Finish(ctx, handle, actor, "quit")
 }
+
+func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentStarter, executable string) error {
+	child, err := ui.Start(ctx, executable)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = child.Close() }()
+	if err := ui.SendState(child.Writer, ui.State{Phase: "starting", Status: "Starting local KurrentDB..."}); err != nil {
+		return err
+	}
+	if err := startKurrent(ctx); err != nil {
+		_ = ui.SendState(child.Writer, ui.State{Phase: "error", Status: err.Error()})
+		return err
+	}
+	settings, err := appconfig.Load()
+	if err != nil {
+		return err
+	}
+	workspace, err := currentWorkspace()
+	if err != nil {
+		return err
+	}
+	selected, saved := savedSetup(settings, workspace)
+	if !saved {
+		return errors.New("OpenTUI setup requires a saved connection; run the Go TUI once or configure provider, model, and API key")
+	}
+	config, err := configFromTUI(selected, settings)
+	if err != nil {
+		return err
+	}
+	runtime, err := factory(config)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = runtime.close() }()
+	handle, err := runtime.sessions.Start(ctx, actor, config.workspace)
+	if err != nil {
+		return err
+	}
+	messages := []agent.Message{}
+	var pending *agent.PendingApproval
+	allowAll := false
+	if err := sendUIState(child.Writer, config, messages, pending, "READY"); err != nil {
+		return err
+	}
+	for {
+		message, err := ui.Read(child.Reader)
+		if err != nil {
+			_ = runtime.sessions.Fail(context.WithoutCancel(ctx), handle, actor, "ui_disconnected")
+			return err
+		}
+		switch message.Type {
+		case "app.ready":
+			if err := sendUIState(child.Writer, config, messages, pending, "READY"); err != nil {
+				return err
+			}
+			continue
+		case "app.quit":
+			return runtime.sessions.Finish(ctx, handle, actor, "quit")
+		case "prompt.submit":
+			var request struct {
+				Prompt string `json:"prompt"`
+			}
+			if err := json.Unmarshal(message.Payload, &request); err != nil || strings.TrimSpace(request.Prompt) == "" || pending != nil {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(request.Prompt), "/") {
+				status, updatedAllowAll, handled := handleUICommand(ctx, runtime, handle, &config, request.Prompt, allowAll)
+				if handled {
+					allowAll = updatedAllowAll
+					if err := sendUIState(child.Writer, config, messages, pending, status); err != nil {
+						return err
+					}
+					continue
+				}
+			}
+			messages = append(messages, agent.Message{Role: agent.RoleUser, Content: request.Prompt})
+			result, err := runtime.loop.RunWithApproval(ctx, handle, actor, runtime.provider, agent.CompletionRequest{Model: config.model, Messages: messages, Tools: runtime.tools})
+			if err != nil {
+				_ = sendUIState(child.Writer, config, messages, nil, displayUIError(err))
+				continue
+			}
+			messages, pending = result.Messages, result.Pending
+			for pending != nil && allowAll {
+				result, err = runtime.loop.Approve(ctx, handle, actor, runtime.provider, pending)
+				if err != nil {
+					_ = sendUIState(child.Writer, config, messages, nil, displayUIError(err))
+					pending = nil
+					break
+				}
+				messages, pending = result.Messages, result.Pending
+			}
+		case "approval.resolve":
+			var request struct {
+				Approved bool `json:"approved"`
+			}
+			if err := json.Unmarshal(message.Payload, &request); err != nil || pending == nil {
+				continue
+			}
+			var result agent.LoopResult
+			if request.Approved {
+				result, err = runtime.loop.Approve(ctx, handle, actor, runtime.provider, pending)
+			} else {
+				result, err = runtime.loop.Deny(ctx, handle, actor, runtime.provider, pending, "user_denied")
+			}
+			if err != nil {
+				_ = sendUIState(child.Writer, config, messages, nil, displayUIError(err))
+				pending = nil
+				continue
+			}
+			messages, pending = result.Messages, result.Pending
+		}
+		if err := sendUIState(child.Writer, config, messages, pending, "READY"); err != nil {
+			return err
+		}
+	}
+}
+
+func handleUICommand(ctx context.Context, runtime *runtime, handle *session.Handle, config *config, input string, allowAll bool) (string, bool, bool) {
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		return "", allowAll, false
+	}
+	switch parts[0] {
+	case "/help":
+		return "Commands: /model [NAME], /theme [default|contrast|mono], /allow-all [on|off], /settings", allowAll, true
+	case "/settings":
+		settings, err := appconfig.Load()
+		if err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		theme := settings.Theme
+		if theme == "" {
+			theme = "default"
+		}
+		return fmt.Sprintf("Provider: %s  Model: %s  Theme: %s (next session)  Approval: %s", config.provider, config.model, theme, approvalModeLabel(allowAll)), allowAll, true
+	case "/allow-all":
+		enabled := len(parts) < 2 || parts[1] == "on"
+		if len(parts) > 1 && parts[1] != "on" && parts[1] != "off" {
+			return "Usage: /allow-all [on|off]", allowAll, true
+		}
+		if err := runtime.sessions.Record(ctx, handle, events.ApprovalModeChanged, actor, events.ApprovalModeChangedPayload{AllowAll: enabled}); err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		return "Approval mode: " + approvalModeLabel(enabled), enabled, true
+	case "/theme":
+		if len(parts) != 2 || (parts[1] != "default" && parts[1] != "contrast" && parts[1] != "mono") {
+			return "Usage: /theme [default|contrast|mono]", allowAll, true
+		}
+		if err := runtime.sessions.Record(ctx, handle, events.SessionConfigChanged, actor, events.SessionConfigChangedPayload{Setting: "theme", Current: parts[1]}); err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		if err := appconfig.SaveTheme(parts[1]); err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		return "Theme: " + parts[1] + " (applies next session)", allowAll, true
+	case "/model":
+		if len(parts) == 1 {
+			if err := runtime.sessions.Record(ctx, handle, events.ModelListRequested, actor, events.ModelListRequestedPayload{Provider: config.provider}); err != nil {
+				return "Error: " + err.Error(), allowAll, true
+			}
+			available, err := models.List(ctx, models.Config{Provider: config.provider, APIKey: config.apiKey})
+			if err != nil {
+				_ = runtime.sessions.Record(context.WithoutCancel(ctx), handle, events.ModelListFailed, actor, events.ModelListFailedPayload{Provider: config.provider, Code: "catalog_failed"})
+				return "Error: " + err.Error(), allowAll, true
+			}
+			if err := runtime.sessions.Record(ctx, handle, events.ModelListCompleted, actor, events.ModelListCompletedPayload{Provider: config.provider, Count: len(available)}); err != nil {
+				return "Error: " + err.Error(), allowAll, true
+			}
+			return "Available models: " + strings.Join(available, ", "), allowAll, true
+		}
+		model := parts[1]
+		if err := runtime.sessions.Record(ctx, handle, events.SessionConfigChanged, actor, events.SessionConfigChangedPayload{Setting: "model", Previous: config.model, Current: model}); err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		if err := appconfig.SaveConnection(config.provider, config.apiKey, model); err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		config.model = model
+		return "Model: " + model, allowAll, true
+	default:
+		return "Unknown command. Run /help.", allowAll, true
+	}
+}
+
+func approvalModeLabel(allowAll bool) string {
+	if allowAll {
+		return "allow all (session only)"
+	}
+	return "confirm each action"
+}
+
+func currentWorkspace() (string, error) {
+	workspace, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("get working directory: %w", err)
+	}
+	workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace path: %w", err)
+	}
+	return workspace, nil
+}
+
+func sendUIState(writer io.Writer, config config, messages []agent.Message, pending *agent.PendingApproval, status string) error {
+	transcript := make([]string, 0, len(messages)*2)
+	for _, message := range messages {
+		if message.Content == "" {
+			continue
+		}
+		label := "You"
+		if message.Role == agent.RoleAssistant {
+			label = config.model
+		}
+		transcript = append(transcript, label+": "+message.Content)
+	}
+	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Workspace: config.workspace, Status: status, Transcript: transcript}
+	if pending != nil {
+		state.Pending = "Approval required: " + pending.Summary + "\nHash: " + pending.Hash + "\n[y] approve  [n] deny"
+	}
+	return ui.SendState(writer, state)
+}
+
+func displayUIError(err error) string { return "Error: " + err.Error() }
 
 func savedSetup(settings appconfig.Settings, workspace string) (tui.SetupConfig, bool) {
 	provider := settings.Provider
@@ -190,7 +434,7 @@ type tuiRunner struct {
 	config  config
 }
 
-func (r tuiRunner) Turn(ctx context.Context, messages []agent.Message) (agent.LoopResult, error) {
+func (r *tuiRunner) Turn(ctx context.Context, messages []agent.Message) (agent.LoopResult, error) {
 	return r.runtime.loop.RunWithApproval(ctx, r.handle, actor, r.runtime.provider, agent.CompletionRequest{
 		Model:    r.config.model,
 		Messages: messages,
@@ -198,11 +442,98 @@ func (r tuiRunner) Turn(ctx context.Context, messages []agent.Message) (agent.Lo
 	})
 }
 
-func (r tuiRunner) Resolve(ctx context.Context, pending *agent.PendingApproval, approved bool) (agent.LoopResult, error) {
+func (r *tuiRunner) Resolve(ctx context.Context, pending *agent.PendingApproval, approved bool) (agent.LoopResult, error) {
 	if approved {
 		return r.runtime.loop.Approve(ctx, r.handle, actor, r.runtime.provider, pending)
 	}
 	return r.runtime.loop.Deny(ctx, r.handle, actor, r.runtime.provider, pending, "user_denied")
+}
+
+func (r *tuiRunner) ListModels(ctx context.Context) ([]string, error) {
+	return r.listModels(ctx, r.config.provider, r.config.apiKey)
+}
+
+func (r *tuiRunner) ListModelsFor(ctx context.Context, provider, apiKey string) ([]string, error) {
+	return r.listModels(ctx, provider, apiKey)
+}
+
+func (r *tuiRunner) listModels(ctx context.Context, provider, apiKey string) ([]string, error) {
+	if err := r.runtime.sessions.Record(ctx, r.handle, events.ModelListRequested, actor, events.ModelListRequestedPayload{Provider: provider}); err != nil {
+		return nil, fmt.Errorf("record model list request: %w", err)
+	}
+	listed, err := models.List(ctx, models.Config{Provider: provider, APIKey: apiKey})
+	if err != nil {
+		_ = r.runtime.sessions.Record(context.WithoutCancel(ctx), r.handle, events.ModelListFailed, actor, events.ModelListFailedPayload{Provider: provider, Code: "catalog_failed"})
+		return nil, err
+	}
+	if err := r.runtime.sessions.Record(ctx, r.handle, events.ModelListCompleted, actor, events.ModelListCompletedPayload{Provider: provider, Count: len(listed)}); err != nil {
+		return nil, fmt.Errorf("record model list completion: %w", err)
+	}
+	return listed, nil
+}
+
+func (r *tuiRunner) SetConnection(ctx context.Context, selected tui.SetupConfig) error {
+	updated, err := configFromTUI(selected, appconfig.Settings{Transport: r.config.transport})
+	if err != nil {
+		return err
+	}
+	provider, err := newProvider(updated.provider, updated.transport, updated.apiKey)
+	if err != nil {
+		return err
+	}
+	if err := r.runtime.sessions.Record(ctx, r.handle, events.SessionConfigChanged, actor, events.SessionConfigChangedPayload{
+		Setting: "connection", Previous: r.config.provider + " / " + r.config.model, Current: updated.provider + " / " + updated.model,
+	}); err != nil {
+		return fmt.Errorf("record connection change: %w", err)
+	}
+	if err := appconfig.SaveConnection(updated.provider, updated.apiKey, updated.model); err != nil {
+		return fmt.Errorf("save connection: %w", err)
+	}
+	r.runtime.provider = provider
+	r.config = updated
+	return nil
+}
+
+func (r *tuiRunner) SetModel(ctx context.Context, model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return errors.New("model is required")
+	}
+	if model == r.config.model {
+		return nil
+	}
+	if err := r.runtime.sessions.Record(ctx, r.handle, events.SessionConfigChanged, actor, events.SessionConfigChangedPayload{
+		Setting: "model", Previous: r.config.model, Current: model,
+	}); err != nil {
+		return fmt.Errorf("record model change: %w", err)
+	}
+	if err := appconfig.SaveConnection(r.config.provider, r.config.apiKey, model); err != nil {
+		return fmt.Errorf("save model selection: %w", err)
+	}
+	r.config.model = model
+	return nil
+}
+
+func (r *tuiRunner) SetTheme(ctx context.Context, theme string) error {
+	if err := r.runtime.sessions.Record(ctx, r.handle, events.SessionConfigChanged, actor, events.SessionConfigChangedPayload{
+		Setting: "theme", Current: theme,
+	}); err != nil {
+		return fmt.Errorf("record theme change: %w", err)
+	}
+	if err := appconfig.SaveTheme(theme); err != nil {
+		return fmt.Errorf("save theme selection: %w", err)
+	}
+	if err := tui.SetTheme(theme); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *tuiRunner) SetAllowAll(ctx context.Context, enabled bool) error {
+	if err := r.runtime.sessions.Record(ctx, r.handle, events.ApprovalModeChanged, actor, events.ApprovalModeChangedPayload{AllowAll: enabled}); err != nil {
+		return fmt.Errorf("record approval mode change: %w", err)
+	}
+	return nil
 }
 
 func run(ctx context.Context, args []string, input io.Reader, output io.Writer, factory runtimeFactory) error {

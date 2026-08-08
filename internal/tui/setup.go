@@ -80,6 +80,8 @@ type setupModel struct {
 	spinner    spinner.Model
 	loading    bool
 	canceled   bool
+	embedded   bool
+	complete   bool
 	err        string
 	width      int
 	height     int
@@ -172,6 +174,10 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = min(len(m.models)-1, m.selected+1)
 				return m, nil
 			case "enter":
+				if m.embedded {
+					m.complete = true
+					return m, nil
+				}
 				return m, tea.Quit
 			}
 		}

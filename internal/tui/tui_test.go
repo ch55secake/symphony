@@ -18,6 +18,17 @@ type fakeRunner struct {
 	approved      bool
 }
 
+func (r *fakeRunner) ListModels(context.Context) ([]string, error) {
+	return []string{"model", "other"}, nil
+}
+func (r *fakeRunner) SetModel(context.Context, string) error  { return nil }
+func (r *fakeRunner) SetTheme(context.Context, string) error  { return nil }
+func (r *fakeRunner) SetAllowAll(context.Context, bool) error { return nil }
+func (r *fakeRunner) ListModelsFor(context.Context, string, string) ([]string, error) {
+	return []string{"model", "other"}, nil
+}
+func (r *fakeRunner) SetConnection(context.Context, SetupConfig) error { return nil }
+
 func (r *fakeRunner) Turn(_ context.Context, messages []agent.Message) (agent.LoopResult, error) {
 	r.turnMessages = messages
 	return r.turnResult, nil
@@ -91,6 +102,42 @@ func TestCommandBarIsSingleLineAndRaised(t *testing.T) {
 	}
 }
 
+func TestCommandSuggestionsRenderAndTabCompletes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newModel(ctx, cancel, Config{}, &fakeRunner{})
+	m.width, m.height = 100, 30
+	m.input.SetValue("/th")
+	m.refreshCommandSuggestions()
+	view := m.View()
+	if !strings.Contains(view, "/theme") || !strings.Contains(view, "Up/Down selects") || strings.Index(view, "/theme") > strings.Index(view, "ASK") || !strings.Contains(view, "SYMPHONY") {
+		t.Fatalf("view = %q", view)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(model)
+	if m.input.Value() != "/theme" {
+		t.Fatalf("input = %q", m.input.Value())
+	}
+}
+
+func TestCommandSuggestionsScrollWithSelection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newModel(ctx, cancel, Config{}, &fakeRunner{})
+	m.width, m.height = 100, 30
+	m.input.SetValue("/")
+	m.refreshCommandSuggestions()
+	for range commandSuggestions("/") {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(model)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(model)
+	if m.input.Value() != "/theme" {
+		t.Fatalf("input = %q", m.input.Value())
+	}
+}
+
 func TestInitialPromptSubmitsOnChatStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -148,6 +195,42 @@ func TestApprovalViewDoesNotRenderToolResultContent(t *testing.T) {
 	m = updated.(model)
 	if !runner.resolved || runner.approved || m.pending != nil || m.busy {
 		t.Fatalf("model = %#v, runner = %#v; expected denied approval", m, runner)
+	}
+}
+
+func TestCommandsChangeModelAndTheme(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newModel(ctx, cancel, Config{Model: "model"}, &fakeRunner{})
+	m.input.SetValue("/model other")
+	updated, command := m.submit()
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.config.Model != "other" {
+		t.Fatalf("model = %q", m.config.Model)
+	}
+	m.input.SetValue("/theme mono")
+	updated, command = m.submit()
+	updated, _ = updated.(model).Update(command())
+	if currentTheme() != "mono" {
+		t.Fatalf("theme = %q", currentTheme())
+	}
+}
+
+func TestAllowAllAutomaticallyApprovesPendingAction(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := &fakeRunner{resolveResult: agent.LoopResult{Completion: &agent.Completion{}, Messages: []agent.Message{}}}
+	m := newModel(ctx, cancel, Config{}, runner)
+	m.allowAll = true
+	updated, command := m.Update(turnResultMsg{result: agent.LoopResult{Pending: &agent.PendingApproval{}}})
+	if command == nil {
+		t.Fatal("expected automatic approval command")
+	}
+	updated, _ = updated.Update(command())
+	if !runner.resolved || !runner.approved {
+		t.Fatalf("runner = %#v", runner)
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 
 func TestLoadFileReadsYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	contents := []byte("kurrentdb_url: kurrentdb://localhost:2113?tls=false\nprovider: opencode\ntransport: chat-completions\nmodel: kimi-test\nworkspace: /workspace\nopenai_api_key: openai-key\nanthropic_api_key: anthropic-key\nopencode_api_key: opencode-key\n")
+	contents := []byte("kurrentdb_url: kurrentdb://localhost:2113?tls=false\nprovider: opencode\ntransport: chat-completions\nmodel: kimi-test\nworkspace: /workspace\nopenai_api_key: openai-key\nanthropic_api_key: anthropic-key\nopencode_api_key: opencode-key\ntheme: mono\n")
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -17,8 +17,22 @@ func TestLoadFileReadsYAML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile() error = %v", err)
 	}
-	if settings.KurrentDBURL != "kurrentdb://localhost:2113?tls=false" || settings.Provider != "opencode" || settings.Transport != "chat-completions" || settings.Model != "kimi-test" || settings.Workspace != "/workspace" || settings.OpenAIAPIKey != "openai-key" || settings.AnthropicAPIKey != "anthropic-key" || settings.OpenCodeAPIKey != "opencode-key" {
+	if settings.KurrentDBURL != "kurrentdb://localhost:2113?tls=false" || settings.Provider != "opencode" || settings.Transport != "chat-completions" || settings.Model != "kimi-test" || settings.Workspace != "/workspace" || settings.OpenAIAPIKey != "openai-key" || settings.AnthropicAPIKey != "anthropic-key" || settings.OpenCodeAPIKey != "opencode-key" || settings.Theme != "mono" {
 		t.Fatalf("LoadFile() = %#v", settings)
+	}
+}
+
+func TestSaveThemePreservesExistingSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("provider: openai\nmodel: gpt-test\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := saveTheme(path, "contrast"); err != nil {
+		t.Fatalf("saveTheme() error = %v", err)
+	}
+	settings, err := LoadFile(path)
+	if err != nil || settings.Theme != "contrast" || settings.Provider != "openai" || settings.Model != "gpt-test" {
+		t.Fatalf("LoadFile() = %#v, %v", settings, err)
 	}
 }
 

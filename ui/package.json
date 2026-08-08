@@ -1,0 +1,20 @@
+{
+  "name": "symphony-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/index.tsx",
+    "build": "mkdir -p ../internal/ui/assets && bun build --compile ${BUN_TARGET:+--target=$BUN_TARGET} --outfile=../internal/ui/assets/symphony-ui src/index.tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opentui/core": "latest",
+    "@opentui/react": "latest",
+    "react": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+	"@types/bun": "latest",
+    "typescript": "latest"
+  }
+}
