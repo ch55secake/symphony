@@ -89,7 +89,7 @@ func (m welcomeModel) View() string {
 	composer := composerStyle.Width(max(20, m.width-15)).Render(welcomePromptStyle.Render("ASK  ") + m.input.View())
 	content := markStyle.Render(symphonyMark) + "\n\n" +
 		subtleStyle.Render(m.config.Provider+" / "+m.config.Model+"  |  "+m.config.Workspace) + "\n\n" +
-		composer + "\n\n" + subtleStyle.Render("Enter sends  ·  Ctrl+Q quits")
+		composer + "\n\n" + subtleStyle.Render("Enter starts chat  ·  Ctrl+Q quits")
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 

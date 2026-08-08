@@ -108,7 +108,7 @@ func TestWelcomeRendersMarkAndBeginsOnEnter(t *testing.T) {
 	defer cancel()
 	m := newWelcomeModel(ctx, cancel, SetupConfig{Provider: "opencode-go", Model: "gpt-5.6-luna", Workspace: "/workspace"})
 	m.width, m.height = 120, 40
-	if !m.input.Focused() || !strings.Contains(m.View(), "███████╗") || !strings.Contains(m.View(), "ASK") || !strings.Contains(m.View(), "╭") {
+	if !m.input.Focused() || !strings.Contains(m.View(), "███████╗") || !strings.Contains(m.View(), "ASK") || !strings.Contains(m.View(), "╭") || !strings.Contains(m.View(), "Enter starts chat") {
 		t.Fatalf("view = %q", m.View())
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})

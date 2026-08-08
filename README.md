@@ -195,10 +195,10 @@ go run ./cmd/symphony
 
 Symphony starts or reuses a local `symphony-kurrentdb` Docker container before opening
 the TUI. When the configuration already contains a provider, model, and matching API
-key, Symphony opens chat immediately. Otherwise, the centered splash accepts `/connect`,
-which collects a provider API key, fetches available models, and saves the selected
-provider, key, and model in the user configuration file. The TUI always uses the current
-directory as the workspace.
+key, Symphony opens the welcome screen; pressing Enter starts chat. Otherwise, the
+centered splash accepts `/connect`, which collects a provider API key, fetches available
+models, and saves the selected provider, key, and model in the user configuration file.
+The TUI always uses the current directory as the workspace.
 
 Choose `opencode-go` for an OpenCode Go subscription. It uses the Go model catalog and
 endpoint, which are separate from pay-as-you-go OpenCode Zen billing.
