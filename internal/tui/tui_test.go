@@ -78,7 +78,7 @@ func TestEnterSubmitsAndRendersUserMessage(t *testing.T) {
 }
 
 func TestDisplayErrorGuidesUnauthorizedReconnect(t *testing.T) {
-	if got := displayError(errors.New("complete model turn: OpenCode response returned HTTP 401")); got.Error() != "provider rejected the API key; restart Symphony and run /connect" {
+	if got := displayError(errors.New("complete model turn: OpenCode response returned HTTP 401: invalid key")); got.Error() != "complete model turn: OpenCode response returned HTTP 401: invalid key; restart Symphony and run /connect" {
 		t.Fatalf("displayError() = %q", got)
 	}
 }

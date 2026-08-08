@@ -156,7 +156,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func displayError(err error) error {
 	if strings.Contains(err.Error(), "HTTP 401") {
-		return errors.New("provider rejected the API key; restart Symphony and run /connect")
+		return fmt.Errorf("%w; restart Symphony and run /connect", err)
 	}
 	return err
 }

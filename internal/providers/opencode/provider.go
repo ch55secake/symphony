@@ -12,6 +12,7 @@ import (
 
 	"github.com/ch55secake/symphony/internal/agent"
 	"github.com/ch55secake/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/providers"
 	"github.com/ch55secake/symphony/internal/providers/openai"
 )
 
@@ -41,9 +42,13 @@ type Provider struct {
 // Error is a safe representation of a non-successful OpenCode response.
 type Error struct {
 	StatusCode int
+	Detail     string
 }
 
 func (e *Error) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("OpenCode response returned HTTP %d: %s", e.StatusCode, e.Detail)
+	}
 	return fmt.Sprintf("OpenCode response returned HTTP %d", e.StatusCode)
 }
 
@@ -91,7 +96,7 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 		}
 		var responseError *openai.Error
 		if errors.As(err, &responseError) {
-			return agent.Completion{}, &Error{StatusCode: responseError.StatusCode}
+			return agent.Completion{}, &Error{StatusCode: responseError.StatusCode, Detail: responseError.Detail}
 		}
 		return agent.Completion{}, err
 	}
@@ -112,7 +117,7 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return agent.Completion{}, &Error{StatusCode: response.StatusCode}
+		return agent.Completion{}, &Error{StatusCode: response.StatusCode, Detail: providers.ErrorDetail(response.Body, p.apiKey)}
 	}
 	var payload chatResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
