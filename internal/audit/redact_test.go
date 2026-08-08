@@ -60,12 +60,12 @@ func TestDefaultPolicyRedactsSensitiveValuesInArrays(t *testing.T) {
 func TestDefaultPolicyRedactsSecretCommandArguments(t *testing.T) {
 	t.Parallel()
 	payload, redactions, err := DefaultPolicy().Redact(map[string]any{
-		"arguments": []any{"--token=top-secret"},
+		"arguments": []any{"--token=top-secret", "--token", "top-secret", "-secret", "also-secret"},
 	})
 	if err != nil {
 		t.Fatalf("Redact() error = %v", err)
 	}
-	if len(redactions) != 1 || redactions[0].Path != "$.arguments[0]" {
+	if len(redactions) != 5 || redactions[0].Path != "$.arguments[0]" || redactions[1].Path != "$.arguments[1]" || redactions[2].Path != "$.arguments[2]" || redactions[3].Path != "$.arguments[3]" || redactions[4].Path != "$.arguments[4]" {
 		t.Fatalf("redactions = %#v, want command argument redaction", redactions)
 	}
 	var decoded struct {
@@ -74,7 +74,9 @@ func TestDefaultPolicyRedactsSecretCommandArguments(t *testing.T) {
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if got := decoded.Arguments[0]; got != RedactedValue {
-		t.Fatalf("argument = %q, want %q", got, RedactedValue)
+	for _, argument := range decoded.Arguments {
+		if argument != RedactedValue {
+			t.Fatalf("argument = %q, want %q", argument, RedactedValue)
+		}
 	}
 }

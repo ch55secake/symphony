@@ -3,9 +3,11 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -43,6 +45,7 @@ type CommandRequest struct {
 	commandHash string
 	approved    bool
 	executed    bool
+	pending     *commandOutcome
 }
 
 // CommandResult returns bounded process output to the runtime without persistence.
@@ -51,6 +54,13 @@ type CommandResult struct {
 	Stderr    []byte
 	ExitCode  int
 	Truncated bool
+}
+
+type commandOutcome struct {
+	result  CommandResult
+	event   events.Type
+	payload any
+	cause   error
 }
 
 // RequestCommand persists command intent before it can be approved or executed.
@@ -111,27 +121,34 @@ func (s *Service) ExecuteCommand(ctx context.Context, handle *session.Handle, ac
 	}
 	request.mu.Lock()
 	defer request.mu.Unlock()
-	if request.executed {
-		return CommandResult{}, ErrCommandAlreadyExecuted
-	}
 	if err := request.validateHandle(handle); err != nil {
 		return CommandResult{}, err
 	}
 	if !request.approved {
 		return CommandResult{}, ErrCommandApprovalRequired
 	}
-	request.executed = true
+	if request.pending != nil {
+		return s.persistCommandOutcome(ctx, handle, actor, request)
+	}
+	if request.executed {
+		return CommandResult{}, ErrCommandAlreadyExecuted
+	}
 
 	started := time.Now()
 	commandHash, err := hashCommand(command)
 	if err != nil || commandHash != request.commandHash {
-		return CommandResult{ExitCode: -1}, s.recordCommandFailure(ctx, handle, actor, request, "command_changed", -1, outputCapture{}, outputCapture{}, started, ErrCommandChanged)
+		request.executed = true
+		request.pending = commandFailureOutcome(request, "command_changed", -1, outputCapture{}, outputCapture{}, started, ErrCommandChanged)
+		return s.persistCommandOutcome(ctx, handle, actor, request)
 	}
 	workingDirectory, err := s.commandDirectory(command.WorkingDirectory)
 	if err != nil {
-		return CommandResult{ExitCode: -1}, s.recordCommandFailure(ctx, handle, actor, request, commandErrorCode(err), -1, outputCapture{}, outputCapture{}, started, err)
+		request.executed = true
+		request.pending = commandFailureOutcome(request, commandErrorCode(err), -1, outputCapture{}, outputCapture{}, started, err)
+		return s.persistCommandOutcome(ctx, handle, actor, request)
 	}
 
+	request.executed = true
 	stdout, stderr := outputCapture{}, outputCapture{}
 	process := exec.CommandContext(ctx, command.Executable, command.Arguments...)
 	process.Dir = workingDirectory
@@ -144,19 +161,18 @@ func (s *Service) ExecuteCommand(ctx context.Context, handle *session.Handle, ac
 		if ctx.Err() != nil {
 			code = "canceled"
 		}
-		return result, s.recordCommandFailure(ctx, handle, actor, request, code, result.ExitCode, stdout, stderr, started, err)
+		request.pending = commandFailureOutcome(request, code, result.ExitCode, stdout, stderr, started, err)
+		return s.persistCommandOutcome(ctx, handle, actor, request)
 	}
-	if err := s.sessions.Record(ctx, handle, events.CommandCompleted, actor, events.CommandCompletedPayload{
+	request.pending = &commandOutcome{result: result, event: events.CommandCompleted, payload: events.CommandCompletedPayload{
 		OperationID: request.OperationID.String(),
 		CommandHash: request.commandHash,
 		ExitCode:    result.ExitCode,
 		Stdout:      stdout.metadata(),
 		Stderr:      stderr.metadata(),
 		DurationMS:  time.Since(started).Milliseconds(),
-	}); err != nil {
-		return result, fmt.Errorf("record command completion: %w", err)
-	}
-	return result, nil
+	}}
+	return s.persistCommandOutcome(ctx, handle, actor, request)
 }
 
 func (r *CommandRequest) validateHandle(handle *session.Handle) error {
@@ -169,8 +185,8 @@ func (r *CommandRequest) validateHandle(handle *session.Handle) error {
 	return nil
 }
 
-func (s *Service) recordCommandFailure(ctx context.Context, handle *session.Handle, actor string, request *CommandRequest, code string, exitCode int, stdout, stderr outputCapture, started time.Time, cause error) error {
-	outcomeErr := s.sessions.Record(ctx, handle, events.CommandFailed, actor, events.CommandFailedPayload{
+func commandFailureOutcome(request *CommandRequest, code string, exitCode int, stdout, stderr outputCapture, started time.Time, cause error) *commandOutcome {
+	return &commandOutcome{result: CommandResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: exitCode, Truncated: stdout.truncated || stderr.truncated}, event: events.CommandFailed, payload: events.CommandFailedPayload{
 		OperationID: request.OperationID.String(),
 		CommandHash: request.commandHash,
 		Code:        code,
@@ -178,11 +194,22 @@ func (s *Service) recordCommandFailure(ctx context.Context, handle *session.Hand
 		Stdout:      stdout.metadata(),
 		Stderr:      stderr.metadata(),
 		DurationMS:  time.Since(started).Milliseconds(),
-	})
-	if outcomeErr != nil {
-		return errors.Join(fmt.Errorf("run workspace command: %w", cause), fmt.Errorf("record command failure: %w", outcomeErr))
+	}, cause: cause}
+}
+
+func (s *Service) persistCommandOutcome(ctx context.Context, handle *session.Handle, actor string, request *CommandRequest) (CommandResult, error) {
+	outcome := request.pending
+	if err := s.sessions.Record(ctx, handle, outcome.event, actor, outcome.payload); err != nil {
+		if outcome.cause != nil {
+			return outcome.result, errors.Join(fmt.Errorf("run workspace command: %w", outcome.cause), fmt.Errorf("record command outcome: %w", err))
+		}
+		return outcome.result, fmt.Errorf("record command outcome: %w", err)
 	}
-	return fmt.Errorf("run workspace command: %w", cause)
+	request.pending = nil
+	if outcome.cause != nil {
+		return outcome.result, fmt.Errorf("run workspace command: %w", outcome.cause)
+	}
+	return outcome.result, nil
 }
 
 func (s *Service) commandDirectory(workingDirectory string) (string, error) {
@@ -253,10 +280,15 @@ type outputCapture struct {
 	buffer    bytes.Buffer
 	bytes     int64
 	truncated bool
+	digest    hash.Hash
 }
 
 func (c *outputCapture) Write(data []byte) (int, error) {
 	c.bytes += int64(len(data))
+	if c.digest == nil {
+		c.digest = sha256.New()
+	}
+	_, _ = c.digest.Write(data)
 	remaining := maxCommandOutputBytes - c.buffer.Len()
 	if remaining > 0 {
 		if len(data) > remaining {
@@ -276,10 +308,14 @@ func (c *outputCapture) Bytes() []byte {
 }
 
 func (c *outputCapture) metadata() events.CommandOutputMetadata {
+	digest := events.Hash(nil)
+	if c.digest != nil {
+		digest = fmt.Sprintf("%x", c.digest.Sum(nil))
+	}
 	return events.CommandOutputMetadata{
 		Bytes:         c.bytes,
 		CapturedBytes: c.buffer.Len(),
-		Hash:          events.Hash(c.buffer.Bytes()),
+		Hash:          digest,
 		Truncated:     c.truncated,
 	}
 }
