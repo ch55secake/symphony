@@ -45,6 +45,32 @@ Run the KurrentDB integration test after the container is healthy:
 KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' go test ./internal/store/kurrentdb
 ```
 
+## Configuration
+
+Symphony reads optional YAML configuration from the user configuration directory:
+
+- macOS: `~/Library/Application Support/symphony/config.yaml`
+- Linux: `~/.config/symphony/config.yaml`
+
+For example:
+
+```yaml
+kurrentdb_url: kurrentdb://localhost:2113?tls=false
+provider: opencode
+model: gpt-5.6-terra
+transport: responses
+workspace: /path/to/workspace
+openai_api_key: your-openai-key
+anthropic_api_key: your-anthropic-key
+opencode_api_key: your-opencode-key
+```
+
+Provider API keys are stored in plaintext in this file. Restrict its permissions and do not
+commit it. Configuration precedence is command-line flags, environment variables, this file,
+then built-in defaults. Environment variables use uppercase key names, including
+`KURRENTDB_URL`, `PROVIDER`, `MODEL`, `TRANSPORT`, `WORKSPACE`, `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, and `OPENCODE_API_KEY`.
+
 ## Session Lifecycle
 
 `internal/session` creates a session stream and owns its revision for lifecycle
