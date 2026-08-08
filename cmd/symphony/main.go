@@ -329,6 +329,11 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			if err := json.Unmarshal(message.Payload, &request); err != nil || request.Value == "" {
 				continue
 			}
+			switch request.Selection {
+			case "model", "theme":
+			default:
+				continue
+			}
 			command := "/" + request.Selection + " " + request.Value
 			status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, command, allowAll)
 			allowAll = updatedAllowAll

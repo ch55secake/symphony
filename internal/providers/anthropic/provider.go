@@ -60,8 +60,12 @@ func (e *Error) Error() string {
 }
 
 func New(config Config) (*Provider, error) {
+	name := config.ProviderName
+	if name == "" {
+		name = "Anthropic"
+	}
 	if strings.TrimSpace(config.APIKey) == "" {
-		return nil, errors.New("Anthropic API key is required")
+		return nil, fmt.Errorf("%s API key is required", name)
 	}
 	baseURL := strings.TrimRight(config.BaseURL, "/")
 	if baseURL == "" {
@@ -74,10 +78,6 @@ func New(config Config) (*Provider, error) {
 	client := config.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
-	}
-	name := config.ProviderName
-	if name == "" {
-		name = "Anthropic"
 	}
 	return &Provider{apiKey: config.APIKey, baseURL: baseURL, maxTokens: maxTokens, httpClient: client, providerName: name, bearerAuth: config.BearerAuth}, nil
 }

@@ -266,7 +266,7 @@ func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, acto
 				results = append(results, result)
 				continue
 			}
-			result, toolErr := siblingTool.Execute(ctx, handle, actor, sibling.Arguments)
+			result, toolErr := siblingTool.Execute(ctx, handle, sibling.Name, sibling.Arguments)
 			result.CallID, result.Name = sibling.ID, sibling.Name
 			if err := l.turns.RecordToolResult(ctx, handle, sibling.Name, result); err != nil {
 				return nil, false, fmt.Errorf("record tool result: %w", err)
