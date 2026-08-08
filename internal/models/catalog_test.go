@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,33 @@ func TestListUsesProviderAuthenticationAndSortsModels(t *testing.T) {
 	listed, err := List(context.Background(), Config{Provider: "openai", APIKey: " test-key\n", BaseURL: server.URL})
 	if err != nil || len(listed) != 2 || listed[0] != "a-model" || listed[1] != "z-model" {
 		t.Fatalf("List() = %#v, %v", listed, err)
+	}
+}
+
+func TestListRejectsInvalidInputsAndResponses(t *testing.T) {
+	if _, err := List(context.Background(), Config{Provider: "openai"}); err == nil || !strings.Contains(err.Error(), "API key") {
+		t.Fatalf("List() error = %v", err)
+	}
+	if _, err := List(context.Background(), Config{Provider: "unknown", APIKey: "test-key"}); err == nil || !strings.Contains(err.Error(), "unknown provider") {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, test := range []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{status: http.StatusUnauthorized, want: "HTTP 401"},
+		{status: http.StatusOK, body: `{"data":[]}`, want: "no models"},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(test.status)
+			_, _ = writer.Write([]byte(test.body))
+		}))
+		_, err := List(context.Background(), Config{Provider: "openai", APIKey: "test-key", BaseURL: server.URL})
+		server.Close()
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("List() error = %v, want %q", err, test.want)
+		}
 	}
 }
 

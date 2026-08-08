@@ -65,8 +65,11 @@ func TestSaveConnectionPreservesExistingSettings(t *testing.T) {
 		t.Fatalf("settings = %#v", settings)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("config permissions = %v, %v", info.Mode().Perm(), err)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("config permissions = %v, want 0600", info.Mode().Perm())
 	}
 }
 

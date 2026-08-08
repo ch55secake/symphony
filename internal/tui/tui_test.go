@@ -156,6 +156,18 @@ func TestSetupDisplaysDiscoveredModels(t *testing.T) {
 	}
 }
 
+func TestSetupReportsEmptyModelList(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newSetupModel(ctx, cancel, SetupConfig{Workspace: "/workspace"}, func(context.Context, string, string) ([]string, error) { return nil, nil })
+	m.loading = true
+	updated, _ := m.Update(modelListMsg{})
+	m = updated.(setupModel)
+	if m.stage != setupCommand || m.err != "No models are available for this key." {
+		t.Fatalf("model = %#v", m)
+	}
+}
+
 func TestWaitModelRendersStartupAndReturnsFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

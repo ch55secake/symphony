@@ -183,10 +183,12 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 			return LoopResult{}, err
 		}
 		if len(completion.ToolCalls) == 0 {
-			return LoopResult{Completion: &completion, Messages: append(current.Messages, Message{
+			messages := append([]Message(nil), current.Messages...)
+			messages = append(messages, Message{
 				Role:    RoleAssistant,
 				Content: completion.Content,
-			})}, nil
+			})
+			return LoopResult{Completion: &completion, Messages: messages}, nil
 		}
 		if round >= l.maxToolRounds {
 			return LoopResult{}, ErrMaxToolRounds
@@ -194,7 +196,7 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 		if pending, ok, err := l.requestApproval(ctx, handle, actor, current, completion, round); err != nil {
 			return LoopResult{}, err
 		} else if ok {
-			return LoopResult{Pending: pending, Messages: pending.continuation.Messages}, nil
+			return LoopResult{Pending: pending, Messages: append([]Message(nil), pending.continuation.Messages...)}, nil
 		}
 
 		results := make([]ToolResult, 0, len(completion.ToolCalls))

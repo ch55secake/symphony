@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -16,6 +17,8 @@ const (
 	opencodeURL  = "https://opencode.ai/zen/v1"
 	anthropicURL = "https://api.anthropic.com/v1"
 )
+
+const modelDiscoveryTimeout = 30 * time.Second
 
 // Config supplies credentials and optional test endpoints for discovery.
 type Config struct {
@@ -58,13 +61,13 @@ func List(ctx context.Context, config Config) ([]string, error) {
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: modelDiscoveryTimeout}
 	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("list models: provider returned HTTP %d", response.StatusCode)
 	}

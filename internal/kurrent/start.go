@@ -31,16 +31,16 @@ func start(ctx context.Context, runner commandRunner, sleep func(time.Duration))
 	output, err := runner.run(ctx, "inspect", "--format", "{{.State.Running}}", containerName)
 	if err == nil {
 		if strings.TrimSpace(string(output)) != "true" {
-			if _, err := runner.run(ctx, "start", containerName); err != nil {
-				return fmt.Errorf("start KurrentDB container: %w", err)
+			if output, err := runner.run(ctx, "start", containerName); err != nil {
+				return commandError("start KurrentDB container", err, output)
 			}
 		}
 	} else {
 		var exitError *exec.ExitError
 		if !errors.As(err, &exitError) {
-			return fmt.Errorf("inspect KurrentDB container: %w", err)
+			return commandError("inspect KurrentDB container", err, output)
 		}
-		if _, err := runner.run(ctx,
+		if output, err := runner.run(ctx,
 			"run", "-d", "--name", containerName,
 			"-p", "127.0.0.1:2113:2113",
 			"-e", "KURRENTDB_CLUSTER_SIZE=1",
@@ -57,14 +57,17 @@ func start(ctx context.Context, runner commandRunner, sleep func(time.Duration))
 			"-v", "symphony-kurrentdb-data:/var/lib/kurrentdb",
 			"-v", "symphony-kurrentdb-logs:/var/log/kurrentdb",
 			"docker.kurrent.io/kurrent-latest/kurrentdb:25.0.1@sha256:3d80e962fffd7a61ffbe07c41b9500a74bbd43e11e7bbee7b160fd5575b0fdea"); err != nil {
-			return fmt.Errorf("create KurrentDB container: %w", err)
+			return commandError("create KurrentDB container", err, output)
 		}
 	}
 
 	for range 48 {
-		output, err := runner.run(ctx, "inspect", "--format", "{{.State.Health.Status}}", containerName)
+		output, err := runner.run(ctx, "inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}", containerName)
 		if err != nil {
-			return fmt.Errorf("inspect KurrentDB health: %w", err)
+			return commandError("inspect KurrentDB health", err, output)
+		}
+		if strings.TrimSpace(string(output)) == "missing" {
+			return fmt.Errorf("KurrentDB container has no health check; remove %q and retry", containerName)
 		}
 		if strings.TrimSpace(string(output)) == "healthy" {
 			return nil
@@ -75,4 +78,12 @@ func start(ctx context.Context, runner commandRunner, sleep func(time.Duration))
 		sleep(2500 * time.Millisecond)
 	}
 	return errors.New("KurrentDB container did not become healthy")
+}
+
+func commandError(operation string, err error, output []byte) error {
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	return fmt.Errorf("%s: %w: %s", operation, err, detail)
 }

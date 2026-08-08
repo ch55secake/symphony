@@ -191,6 +191,8 @@ Start a multi-turn session from the workspace you want Symphony to use:
 go run ./cmd/symphony
 ```
 
+`go run ./cmd/symphony tui` is an equivalent explicit alias.
+
 Symphony starts or reuses a local `symphony-kurrentdb` Docker container before opening
 the TUI. The centered splash accepts `/connect`, which collects a provider API key,
 fetches the models available to that provider, and saves the selected provider, key,

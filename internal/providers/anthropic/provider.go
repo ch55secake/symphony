@@ -95,7 +95,7 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 	if err != nil {
 		return agent.Completion{}, fmt.Errorf("send Anthropic request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return agent.Completion{}, &Error{StatusCode: response.StatusCode, Detail: providers.ErrorDetail(response.Body, p.apiKey)}
 	}

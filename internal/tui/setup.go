@@ -181,6 +181,10 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 			return m, nil
 		}
+		if len(msg.models) == 0 {
+			m.err = "No models are available for this key."
+			return m, nil
+		}
 		m.models = msg.models
 		m.selected = modelIndex(m.models, m.model)
 		m.stage = setupModels
@@ -194,9 +198,10 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var command tea.Cmd
-	if m.stage == setupCommand {
+	switch m.stage {
+	case setupCommand:
 		m.command, command = m.command.Update(msg)
-	} else if m.stage == setupConnect {
+	case setupConnect:
 		m.apiKey, command = m.apiKey.Update(msg)
 	}
 	return m, command

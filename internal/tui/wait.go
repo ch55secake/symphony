@@ -67,7 +67,7 @@ func (m waitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" || msg.String() == "esc" {
+		if msg.String() == "ctrl+c" || msg.String() == "ctrl+q" || msg.String() == "esc" {
 			m.canceled = true
 			m.cancel()
 			return m, tea.Quit

@@ -87,6 +87,20 @@ func saveConnection(path, provider, apiKey, model string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
+	keyName, err := connectionKeyName(provider)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create config file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close config file: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("restrict config permissions: %w", err)
+	}
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")
@@ -98,21 +112,22 @@ func saveConnection(path, provider, apiKey, model string) error {
 	}
 	v.Set("provider", provider)
 	v.Set("model", model)
-	switch provider {
-	case "openai":
-		v.Set("openai_api_key", apiKey)
-	case "anthropic":
-		v.Set("anthropic_api_key", apiKey)
-	case "opencode", "opencode-go":
-		v.Set("opencode_api_key", apiKey)
-	default:
-		return fmt.Errorf("unknown provider %q", provider)
-	}
+	v.Set(keyName, apiKey)
 	if err := v.WriteConfigAs(path); err != nil {
 		return fmt.Errorf("write configuration: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("restrict config permissions: %w", err)
-	}
 	return nil
+}
+
+func connectionKeyName(provider string) (string, error) {
+	switch provider {
+	case "openai":
+		return "openai_api_key", nil
+	case "anthropic":
+		return "anthropic_api_key", nil
+	case "opencode", "opencode-go":
+		return "opencode_api_key", nil
+	default:
+		return "", fmt.Errorf("unknown provider %q", provider)
+	}
 }

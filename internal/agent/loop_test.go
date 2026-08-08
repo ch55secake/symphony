@@ -119,9 +119,14 @@ func TestLoopResultRetainsConversationForNextTurn(t *testing.T) {
 	if err != nil || first.Completion == nil || len(first.Messages) != 2 {
 		t.Fatalf("first result = %#v, error = %v", first, err)
 	}
+	history := append([]Message(nil), first.Messages...)
+	first.Messages[0].Content = "mutated"
+	if provider.calls[0].Messages[0].Content != "first prompt" {
+		t.Fatalf("provider request = %#v, want independent result messages", provider.calls[0].Messages)
+	}
 	second, err := loop.RunWithApproval(context.Background(), handle, "user", provider, CompletionRequest{
 		Model:    "test-model",
-		Messages: append(first.Messages, Message{Role: RoleUser, Content: "second prompt"}),
+		Messages: append(history, Message{Role: RoleUser, Content: "second prompt"}),
 	})
 	if err != nil || second.Completion == nil || len(second.Messages) != 4 {
 		t.Fatalf("second result = %#v, error = %v", second, err)

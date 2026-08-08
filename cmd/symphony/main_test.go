@@ -258,6 +258,9 @@ func TestConfigFromTUIValidatesSelection(t *testing.T) {
 			t.Fatalf("configFromTUI(%#v) error = nil", selected)
 		}
 	}
+	if _, err := configFromTUI(tui.SetupConfig{Provider: "opencode", Model: "model", Workspace: "/workspace"}, appconfig.Settings{Transport: "invalid"}); err == nil {
+		t.Fatal("configFromTUI() error = nil for invalid OpenCode transport")
+	}
 }
 
 func TestConfigFromTUIConfiguresOpenCodeGoTransports(t *testing.T) {

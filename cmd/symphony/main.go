@@ -88,7 +88,7 @@ func execute(ctx context.Context, args []string, input io.Reader, output io.Writ
 	case "replay":
 		return replay(ctx, args[1:], output, replayFactory)
 	default:
-		return errors.New("usage: symphony [run|replay]")
+		return errors.New("usage: symphony [tui|run|replay]")
 	}
 }
 
@@ -125,18 +125,18 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 	if err != nil {
 		return err
 	}
-	if err := appconfig.SaveConnection(selected.Provider, selected.APIKey, selected.Model); err != nil {
-		return err
-	}
 	config, err := configFromTUI(selected, settings)
 	if err != nil {
+		return err
+	}
+	if err := appconfig.SaveConnection(selected.Provider, selected.APIKey, selected.Model); err != nil {
 		return err
 	}
 	runtime, err := factory(config)
 	if err != nil {
 		return err
 	}
-	defer runtime.close()
+	defer func() { _ = runtime.close() }()
 
 	handle, err := runtime.sessions.Start(ctx, actor, config.workspace)
 	if err != nil {
@@ -189,7 +189,7 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer, 
 	if err != nil {
 		return err
 	}
-	defer runtime.close()
+	defer func() { _ = runtime.close() }()
 
 	handle, err := runtime.sessions.Start(ctx, actor, config.workspace)
 	if err != nil {
@@ -289,11 +289,8 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 	if flags.NArg() != 1 || strings.TrimSpace(flags.Arg(0)) == "" {
 		return config{}, errors.New("a prompt is required")
 	}
-	if *provider != "openai" && *provider != "anthropic" && *provider != "opencode" && *provider != "opencode-go" {
-		return config{}, errors.New("provider must be openai, anthropic, opencode, or opencode-go")
-	}
-	if (*provider == "opencode" || *provider == "opencode-go") && *transport != opencode.TransportResponses && *transport != opencode.TransportChat {
-		return config{}, errors.New("OpenCode transport must be responses or chat-completions")
+	if err := validateProviderTransport(*provider, *transport); err != nil {
+		return config{}, err
 	}
 	if strings.TrimSpace(*model) == "" {
 		return config{}, errors.New("model is required")
@@ -322,9 +319,6 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 }
 
 func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (config, error) {
-	if selected.Provider != "openai" && selected.Provider != "anthropic" && selected.Provider != "opencode" && selected.Provider != "opencode-go" {
-		return config{}, errors.New("provider must be openai, anthropic, opencode, or opencode-go")
-	}
 	transport := settings.Transport
 	if transport == "" {
 		transport = opencode.TransportResponses
@@ -332,8 +326,8 @@ func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (confi
 	if selected.Provider == "opencode-go" {
 		transport = openCodeGoTransport(selected.Model)
 	}
-	if (selected.Provider == "opencode" || selected.Provider == "opencode-go") && transport != opencode.TransportResponses && transport != opencode.TransportChat && transport != "messages" {
-		return config{}, errors.New("OpenCode transport must be responses or chat-completions")
+	if err := validateProviderTransport(selected.Provider, transport); err != nil {
+		return config{}, err
 	}
 	if strings.TrimSpace(selected.Model) == "" {
 		return config{}, errors.New("model is required")
@@ -346,6 +340,24 @@ func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (confi
 		connectionString: localKurrentDBURL,
 		apiKey:           strings.TrimSpace(selected.APIKey),
 	}, nil
+}
+
+func validateProviderTransport(provider, transport string) error {
+	switch provider {
+	case "openai", "anthropic":
+		return nil
+	case "opencode":
+		if transport == opencode.TransportResponses || transport == opencode.TransportChat {
+			return nil
+		}
+	case "opencode-go":
+		if transport == opencode.TransportResponses || transport == opencode.TransportChat || transport == "messages" {
+			return nil
+		}
+	default:
+		return errors.New("provider must be openai, anthropic, opencode, or opencode-go")
+	}
+	return errors.New("OpenCode transport must be responses or chat-completions")
 }
 
 func promptApproval(input io.Reader, output io.Writer, pending *agent.PendingApproval) (bool, error) {

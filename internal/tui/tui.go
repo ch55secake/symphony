@@ -140,7 +140,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
-		m.messages = msg.result.Messages
+		m.messages = append([]agent.Message(nil), msg.result.Messages...)
 		m.pending = msg.result.Pending
 		m.refreshConversation()
 		return m, nil
