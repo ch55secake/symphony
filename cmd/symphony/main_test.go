@@ -212,6 +212,7 @@ func TestParseConfigValidatesRunArguments(t *testing.T) {
 	tests := [][]string{
 		{"status"},
 		{"run", "--provider", "other", "--model", "test", "hello"},
+		{"run", "--provider", "opencode", "--transport", "other", "--model", "test", "hello"},
 		{"run", "--provider", "openai", "hello"},
 		{"run", "--provider", "openai", "--model", "test"},
 	}
@@ -223,6 +224,18 @@ func TestParseConfigValidatesRunArguments(t *testing.T) {
 	config, err := parseConfig([]string{"run", "--provider", "anthropic", "--model", "test", "--workspace", root, "hello"})
 	if err != nil || config.workspace != root || config.prompt != "hello" {
 		t.Fatalf("parseConfig() = %#v, %v", config, err)
+	}
+	config, err = parseConfig([]string{"run", "--provider", "opencode", "--transport", "chat-completions", "--model", "kimi-test", "--workspace", root, "hello"})
+	if err != nil || config.transport != "chat-completions" {
+		t.Fatalf("parseConfig() = %#v, %v", config, err)
+	}
+}
+
+func TestNewProviderUsesOpenCodeAPIKey(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "test-key")
+	provider, err := newProvider("opencode", "responses")
+	if err != nil || provider.Name() != "opencode" {
+		t.Fatalf("newProvider() = %#v, %v", provider, err)
 	}
 }
 

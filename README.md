@@ -92,6 +92,13 @@ response error bodies are never persisted by Symphony.
 Configure its `Config.APIKey` from `ANTHROPIC_API_KEY` at process composition time. API
 keys and Anthropic response error bodies are never persisted by Symphony.
 
+## OpenCode Go Provider
+
+`internal/providers/opencode` supports OpenCode Go with `OPENCODE_API_KEY`. It uses
+the OpenCode Zen API without persisting API keys or response error bodies. Select the
+endpoint explicitly: `responses` is the default for Responses-compatible models, and
+`chat-completions` supports OpenAI-compatible chat models.
+
 
 ## Read-Only Tool Loop
 
@@ -125,6 +132,20 @@ KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENAI_API_KEY='...' \
 Anthropic uses `ANTHROPIC_API_KEY` and `--provider anthropic`. The runner prints the final
 completion. Write and command requests stop at a terminal prompt showing only safe action
 metadata and a hash; enter `y` or `yes` to approve, or any other input to deny.
+
+OpenCode Go uses `OPENCODE_API_KEY`. For a Responses-compatible model:
+
+```sh
+KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENCODE_API_KEY='...' \
+  go run ./cmd/symphony run --provider opencode --model gpt-5.6-terra --workspace . "Read README.md"
+```
+
+For a Chat Completions-compatible model, select that transport explicitly:
+
+```sh
+KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENCODE_API_KEY='...' \
+  go run ./cmd/symphony run --provider opencode --transport chat-completions --model kimi-k2.7-code --workspace . "Read README.md"
+```
 
 ## Session Replay
 
