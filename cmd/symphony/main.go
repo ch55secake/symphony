@@ -303,6 +303,9 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				}
 			}
 			messages = append(messages, agent.Message{Role: agent.RoleUser, Content: request.Prompt})
+			if err := sendUIState(child.Writer, config, messages, nil, "WORKING"); err != nil {
+				return err
+			}
 			result, err := runtime.loop.RunWithApproval(ctx, handle, actor, runtime.provider, agent.CompletionRequest{Model: config.model, Messages: messages, Tools: runtime.tools})
 			if err != nil {
 				_ = sendUIState(child.Writer, config, messages, nil, displayUIError(err))
@@ -357,6 +360,9 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				continue
 			}
 			var result agent.LoopResult
+			if err := sendUIState(child.Writer, config, messages, nil, "WORKING"); err != nil {
+				return err
+			}
 			if request.Approved {
 				result, err = runtime.loop.Approve(ctx, handle, actor, runtime.provider, pending)
 			} else {

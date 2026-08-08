@@ -58,12 +58,18 @@ function App() {
   const [state, setState] = useState<State>({ phase: "starting", status: "Starting Symphony..." })
   const [value, setValue] = useState("")
   const [selected, setSelected] = useState(0)
+	const [spinnerFrame, setSpinnerFrame] = useState(0)
   const suggestions = commands.filter((command) => value.startsWith("/") && !value.includes(" ") && command.name.startsWith(value) && command.name !== value)
 
   const colors = state.theme === "contrast" ? { accent: "#22d3ee", model: "#f0abfc", muted: "#e2e8f0", border: "#94a3b8" } : state.theme === "mono" ? { accent: "#ffffff", model: "#ffffff", muted: "#d4d4d4", border: "#737373" } : { accent: "#38bdf8", model: "#f9a8d4", muted: "#94a3b8", border: "#475569" }
 
   useEffect(() => setSelected(0), [value])
   useEffect(() => setSelected(0), [state.phase, state.selection])
+	useEffect(() => {
+		if (state.status !== "WORKING") return
+		const timer = setInterval(() => setSpinnerFrame((frame) => (frame + 1) % 4), 120)
+		return () => clearInterval(timer)
+	}, [state.status])
   useEffect(() => {
     if (!input) return
     const reader = input.stream().pipeThrough(new TextDecoderStream()).getReader()
@@ -157,7 +163,7 @@ function App() {
   return <box flexDirection="column" padding={1} gap={1}>
     <box flexDirection="row" justifyContent="space-between"><text fg={colors.accent}>SYMPHONY</text><text fg={colors.muted}>{state.provider} / {state.model}  {state.workspace}</text></box>
     <Conversation entries={state.transcript ?? []} />
-    <box border borderColor={state.pending ? "#fbbf24" : "#334155"} paddingLeft={1} paddingRight={1}><text fg={state.pending ? "#fbbf24" : "#94a3b8"}>{state.pending ?? state.status}</text></box>
+    <box border borderColor={state.pending ? "#fbbf24" : state.status === "WORKING" ? colors.accent : "#334155"} paddingLeft={1} paddingRight={1}><text fg={state.pending ? "#fbbf24" : state.status === "WORKING" ? colors.accent : "#94a3b8"}>{state.pending ?? (state.status === "WORKING" ? `${["⠋", "⠙", "⠹", "⠸"][spinnerFrame]}  WORKING` : state.status)}</text></box>
     {state.pending ? <text fg="#64748b">User input is paused until the action is approved or denied.</text> : <Composer value={value} setValue={setValue} submit={() => { void submit() }} suggestions={suggestions} selected={selected} />}
   </box>
 }
