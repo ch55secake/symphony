@@ -21,7 +21,6 @@ var (
 	ErrApprovalPending = errors.New("action approval is pending")
 	ErrApprovalUsed    = errors.New("approval has already been resolved")
 	ErrApprovalSession = errors.New("approval belongs to another session")
-	ErrMixedToolCalls  = errors.New("approval-required tool call must be the only tool call in a turn")
 )
 
 // Tool dispatches a provider-requested call to a native Symphony capability.
@@ -228,7 +227,7 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 }
 
 func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, actor string, request CompletionRequest, completion Completion, round int) (*PendingApproval, bool, error) {
-	for _, call := range completion.ToolCalls {
+	for approvalIndex, call := range completion.ToolCalls {
 		tool, exists := l.tools[call.Name]
 		if !exists {
 			continue
@@ -236,9 +235,6 @@ func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, acto
 		approvalTool, needsApproval := tool.(ApprovalTool)
 		if !needsApproval {
 			continue
-		}
-		if len(completion.ToolCalls) != 1 {
-			return nil, false, ErrMixedToolCalls
 		}
 		pending, err := approvalTool.RequestApproval(ctx, handle, actor, call.Arguments)
 		if err != nil {
@@ -248,6 +244,41 @@ func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, acto
 		pending.sessionID = handle.SessionID
 		pending.continuation = request
 		pending.continuation.Messages = append(pending.continuation.Messages, Message{Role: RoleAssistant, Content: completion.Content, ToolCalls: completion.ToolCalls})
+		results := make([]ToolResult, 0, len(completion.ToolCalls)-1)
+		for index, sibling := range completion.ToolCalls {
+			if index == approvalIndex {
+				continue
+			}
+			siblingTool, exists := l.tools[sibling.Name]
+			if !exists {
+				result := failedToolResult(sibling, "unknown tool")
+				if err := l.turns.RecordToolResult(ctx, handle, sibling.Name, result); err != nil {
+					return nil, false, fmt.Errorf("record unknown tool result: %w", err)
+				}
+				results = append(results, result)
+				continue
+			}
+			if _, needsApproval := siblingTool.(ApprovalTool); needsApproval {
+				result := failedToolResult(sibling, "action deferred until the current approval is resolved")
+				if err := l.turns.RecordToolResult(ctx, handle, sibling.Name, result); err != nil {
+					return nil, false, fmt.Errorf("record deferred tool result: %w", err)
+				}
+				results = append(results, result)
+				continue
+			}
+			result, toolErr := siblingTool.Execute(ctx, handle, actor, sibling.Arguments)
+			result.CallID, result.Name = sibling.ID, sibling.Name
+			if err := l.turns.RecordToolResult(ctx, handle, sibling.Name, result); err != nil {
+				return nil, false, fmt.Errorf("record tool result: %w", err)
+			}
+			if toolErr != nil {
+				return nil, false, fmt.Errorf("execute tool %q: %w", sibling.Name, toolErr)
+			}
+			results = append(results, result)
+		}
+		if len(results) > 0 {
+			pending.continuation.Messages = append(pending.continuation.Messages, Message{Role: RoleUser, ToolResults: results})
+		}
 		pending.round = round + 1
 		if err := l.turns.RecordApproval(ctx, handle, actor, events.ApprovalRequested, events.ApprovalRequestedPayload{
 			OperationID: pending.OperationID,
