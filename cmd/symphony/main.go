@@ -139,6 +139,13 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 			return err
 		}
 	}
+	initialPrompt, err := tui.Welcome(ctx, tui.SetupConfig{Provider: config.provider, Model: config.model, Workspace: config.workspace})
+	if err != nil {
+		if errors.Is(err, tui.ErrCanceled) {
+			return nil
+		}
+		return err
+	}
 	runtime, err := factory(config)
 	if err != nil {
 		return err
@@ -150,10 +157,11 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 		return err
 	}
 	err = tui.Run(ctx, tui.Config{
-		Provider:  config.provider,
-		Model:     config.model,
-		Workspace: config.workspace,
-		SessionID: handle.SessionID.String(),
+		Provider:      config.provider,
+		Model:         config.model,
+		Workspace:     config.workspace,
+		SessionID:     handle.SessionID.String(),
+		InitialPrompt: initialPrompt,
 	}, tuiRunner{runtime: runtime, handle: handle, config: config})
 	if err != nil {
 		reason := failureReason(ctx)

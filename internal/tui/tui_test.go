@@ -53,6 +53,9 @@ func TestSubmitRetainsConversationAndRendersResponses(t *testing.T) {
 	if m.busy || len(m.messages) != 2 || !strings.Contains(m.View(), "I inspected the workspace.") {
 		t.Fatalf("model = %#v; expected completed rendered conversation", m)
 	}
+	if !strings.Contains(m.View(), "model") {
+		t.Fatalf("view = %q; expected model response label", m.View())
+	}
 	if len(runner.turnMessages) != 1 || runner.turnMessages[0].Content != "inspect it" {
 		t.Fatalf("turn messages = %#v", runner.turnMessages)
 	}
@@ -74,6 +77,48 @@ func TestEnterSubmitsAndRendersUserMessage(t *testing.T) {
 	m = updated.(model)
 	if m.busy || !strings.Contains(m.View(), "reply") {
 		t.Fatalf("model = %#v; expected rendered provider reply", m)
+	}
+}
+
+func TestCommandBarIsSingleLineAndRaised(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newModel(ctx, cancel, Config{Provider: "test", Model: "model", Workspace: "/workspace", SessionID: "session"}, &fakeRunner{})
+	m.width, m.height = 100, 30
+	m.input.Width = 96
+	if !m.input.Focused() || !strings.Contains(m.View(), "╭") || !strings.Contains(m.View(), "ASK") || !strings.Contains(m.View(), "READY") {
+		t.Fatalf("view = %q", m.View())
+	}
+}
+
+func TestInitialPromptSubmitsOnChatStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newModel(ctx, cancel, Config{InitialPrompt: "hello"}, &fakeRunner{})
+	command := m.Init()
+	updated, _ := m.Update(command())
+	m = updated.(model)
+	if !m.busy || len(m.messages) != 1 || m.messages[0].Content != "hello" {
+		t.Fatalf("model = %#v", m)
+	}
+}
+
+func TestWelcomeRendersMarkAndBeginsOnEnter(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newWelcomeModel(ctx, cancel, SetupConfig{Provider: "opencode-go", Model: "gpt-5.6-luna", Workspace: "/workspace"})
+	m.width, m.height = 120, 40
+	if !m.input.Focused() || !strings.Contains(m.View(), "███████╗") || !strings.Contains(m.View(), "ASK") || !strings.Contains(m.View(), "╭") {
+		t.Fatalf("view = %q", m.View())
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	m = updated.(welcomeModel)
+	if m.input.Value() != "hello" {
+		t.Fatalf("prompt = %q", m.input.Value())
+	}
+	updated, command := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.(welcomeModel).canceled || command == nil {
+		t.Fatalf("welcome update = %#v, command = %#v", updated, command)
 	}
 }
 
