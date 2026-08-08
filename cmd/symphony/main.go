@@ -904,7 +904,7 @@ func newProvider(name, transport, apiKey string) (agent.Provider, error) {
 		return opencode.New(opencode.Config{APIKey: apiKey, Transport: transport})
 	case "opencode-go":
 		if transport == "messages" {
-			return anthropic.New(anthropic.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go"})
+			return anthropic.New(anthropic.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go", ProviderName: "OpenCode Go", BearerAuth: true})
 		}
 		return opencode.New(opencode.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go/v1", Transport: transport})
 	default:
