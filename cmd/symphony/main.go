@@ -20,6 +20,7 @@ import (
 	"github.com/ch55secake/symphony/internal/events"
 	"github.com/ch55secake/symphony/internal/providers/anthropic"
 	"github.com/ch55secake/symphony/internal/providers/openai"
+	"github.com/ch55secake/symphony/internal/providers/opencode"
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/store/kurrentdb"
 	"github.com/ch55secake/symphony/internal/workspace"
@@ -30,6 +31,7 @@ const actor = "cli"
 
 type config struct {
 	provider  string
+	transport string
 	model     string
 	workspace string
 	prompt    string
@@ -159,7 +161,8 @@ func replay(ctx context.Context, args []string, output io.Writer, factory replay
 func parseConfig(args []string) (config, error) {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	provider := flags.String("provider", "", "provider: openai or anthropic")
+	provider := flags.String("provider", "", "provider: openai, anthropic, or opencode")
+	transport := flags.String("transport", opencode.TransportResponses, "OpenCode transport: responses or chat-completions")
 	model := flags.String("model", "", "model name")
 	workspaceRoot := flags.String("workspace", "", "workspace root")
 	if len(args) == 0 || args[0] != "run" {
@@ -171,8 +174,11 @@ func parseConfig(args []string) (config, error) {
 	if flags.NArg() != 1 || strings.TrimSpace(flags.Arg(0)) == "" {
 		return config{}, errors.New("a prompt is required")
 	}
-	if *provider != "openai" && *provider != "anthropic" {
-		return config{}, errors.New("provider must be openai or anthropic")
+	if *provider != "openai" && *provider != "anthropic" && *provider != "opencode" {
+		return config{}, errors.New("provider must be openai, anthropic, or opencode")
+	}
+	if *provider == "opencode" && *transport != opencode.TransportResponses && *transport != opencode.TransportChat {
+		return config{}, errors.New("OpenCode transport must be responses or chat-completions")
 	}
 	if strings.TrimSpace(*model) == "" {
 		return config{}, errors.New("model is required")
@@ -189,7 +195,7 @@ func parseConfig(args []string) (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("resolve workspace path: %w", err)
 	}
-	return config{provider: *provider, model: *model, workspace: root, prompt: flags.Arg(0)}, nil
+	return config{provider: *provider, transport: *transport, model: *model, workspace: root, prompt: flags.Arg(0)}, nil
 }
 
 func promptApproval(input io.Reader, output io.Writer, pending *agent.PendingApproval) (bool, error) {
@@ -219,7 +225,7 @@ func newRuntime(config config) (*runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	provider, err := newProvider(config.provider)
+	provider, err := newProvider(config.provider, config.transport)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -268,13 +274,15 @@ func newReplayReader(connectionString string) (replayReader, error) {
 	return kurrentdb.New(connectionString)
 }
 
-func newProvider(name string) (agent.Provider, error) {
+func newProvider(name, transport string) (agent.Provider, error) {
 	switch name {
 	case "openai":
 		return openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
 	case "anthropic":
 		return anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+	case "opencode":
+		return opencode.New(opencode.Config{APIKey: os.Getenv("OPENCODE_API_KEY"), Transport: transport})
 	default:
-		return nil, errors.New("provider must be openai or anthropic")
+		return nil, errors.New("provider must be openai, anthropic, or opencode")
 	}
 }
