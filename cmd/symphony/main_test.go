@@ -11,6 +11,7 @@ import (
 
 	"github.com/ch55secake/symphony/internal/agent"
 	"github.com/ch55secake/symphony/internal/audit"
+	appconfig "github.com/ch55secake/symphony/internal/config"
 	"github.com/ch55secake/symphony/internal/events"
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/workspace"
@@ -231,9 +232,25 @@ func TestParseConfigValidatesRunArguments(t *testing.T) {
 	}
 }
 
-func TestNewProviderUsesOpenCodeAPIKey(t *testing.T) {
-	t.Setenv("OPENCODE_API_KEY", "test-key")
-	provider, err := newProvider("opencode", "responses")
+func TestParseConfigUsesFileEnvironmentAndFlagPrecedence(t *testing.T) {
+	settings := appconfig.Settings{
+		Provider:     "openai",
+		Model:        "environment-model",
+		Transport:    "responses",
+		Workspace:    "/file-workspace",
+		OpenAIAPIKey: "environment-key",
+	}
+	parsed, err := parseConfigWithSettings([]string{"run", "--model", "flag-model", "hello"}, settings)
+	if err != nil {
+		t.Fatalf("parseConfig() error = %v", err)
+	}
+	if parsed.provider != "openai" || parsed.model != "flag-model" || parsed.workspace != "/file-workspace" || parsed.apiKey != "environment-key" {
+		t.Fatalf("parseConfig() = %#v", parsed)
+	}
+}
+
+func TestNewProviderUsesConfiguredOpenCodeAPIKey(t *testing.T) {
+	provider, err := newProvider("opencode", "responses", "test-key")
 	if err != nil || provider.Name() != "opencode" {
 		t.Fatalf("newProvider() = %#v, %v", provider, err)
 	}
