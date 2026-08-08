@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -94,5 +95,20 @@ func TestSetupSelectsProviderAndRequiresModel(t *testing.T) {
 	m = updated.(setupModel)
 	if m.err != "A model is required." {
 		t.Fatalf("error = %q", m.err)
+	}
+}
+
+func TestWaitModelRendersStartupAndReturnsFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newWaitModel(ctx, cancel, func(context.Context) error { return errors.New("Docker is unavailable") })
+	m.width = 100
+	if !strings.Contains(m.View(), "Starting local KurrentDB") {
+		t.Fatalf("view = %q", m.View())
+	}
+	updated, command := m.Update(kurrentStartedMsg{err: errors.New("Docker is unavailable")})
+	m = updated.(waitModel)
+	if m.err == nil || command == nil {
+		t.Fatalf("model = %#v; expected startup failure and quit command", m)
 	}
 }

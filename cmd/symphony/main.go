@@ -100,7 +100,10 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 	if err != nil {
 		return fmt.Errorf("resolve workspace path: %w", err)
 	}
-	if err := startKurrent(ctx); err != nil {
+	if err := tui.WaitForKurrent(ctx, startKurrent); err != nil {
+		if errors.Is(err, tui.ErrCanceled) {
+			return nil
+		}
 		return err
 	}
 	settings, err := appconfig.Load()
