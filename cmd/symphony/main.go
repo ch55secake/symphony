@@ -23,6 +23,7 @@ import (
 	"github.com/ch55secake/symphony/internal/providers/opencode"
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/store/kurrentdb"
+	"github.com/ch55secake/symphony/internal/tui"
 	"github.com/ch55secake/symphony/internal/workspace"
 	"github.com/google/uuid"
 )
@@ -65,16 +66,71 @@ func main() {
 
 func execute(ctx context.Context, args []string, input io.Reader, output io.Writer, factory runtimeFactory, replayFactory replayFactory) error {
 	if len(args) == 0 {
-		return errors.New("usage: symphony run|replay")
+		return runTUI(ctx, args, factory)
 	}
 	switch args[0] {
 	case "run":
 		return run(ctx, args, input, output, factory)
+	case "tui":
+		return runTUI(ctx, args[1:], factory)
 	case "replay":
 		return replay(ctx, args[1:], output, replayFactory)
 	default:
-		return errors.New("usage: symphony run|replay")
+		return runTUI(ctx, args, factory)
 	}
+}
+
+func runTUI(ctx context.Context, args []string, factory runtimeFactory) error {
+	config, err := parseTUIConfig(args)
+	if err != nil {
+		return err
+	}
+	runtime, err := factory(config)
+	if err != nil {
+		return err
+	}
+	defer runtime.close()
+
+	handle, err := runtime.sessions.Start(ctx, actor, config.workspace)
+	if err != nil {
+		return err
+	}
+	err = tui.Run(ctx, tui.Config{
+		Provider:  config.provider,
+		Model:     config.model,
+		Workspace: config.workspace,
+		SessionID: handle.SessionID.String(),
+	}, tuiRunner{runtime: runtime, handle: handle, config: config})
+	if err != nil {
+		reason := failureReason(ctx)
+		if errors.Is(err, tui.ErrCanceled) {
+			reason = "canceled"
+		}
+		_ = runtime.sessions.Fail(context.WithoutCancel(ctx), handle, actor, reason)
+		return err
+	}
+	return runtime.sessions.Finish(ctx, handle, actor, "quit")
+}
+
+type tuiRunner struct {
+	runtime *runtime
+	handle  *session.Handle
+	config  config
+}
+
+func (r tuiRunner) Turn(ctx context.Context, messages []agent.Message) (agent.LoopResult, error) {
+	return r.runtime.loop.RunWithApproval(ctx, r.handle, actor, r.runtime.provider, agent.CompletionRequest{
+		Model:    r.config.model,
+		Messages: messages,
+		Tools:    r.runtime.tools,
+	})
+}
+
+func (r tuiRunner) Resolve(ctx context.Context, pending *agent.PendingApproval, approved bool) (agent.LoopResult, error) {
+	if approved {
+		return r.runtime.loop.Approve(ctx, r.handle, actor, r.runtime.provider, pending)
+	}
+	return r.runtime.loop.Deny(ctx, r.handle, actor, r.runtime.provider, pending, "user_denied")
 }
 
 func run(ctx context.Context, args []string, input io.Reader, output io.Writer, factory runtimeFactory) error {
@@ -196,6 +252,43 @@ func parseConfig(args []string) (config, error) {
 		return config{}, fmt.Errorf("resolve workspace path: %w", err)
 	}
 	return config{provider: *provider, transport: *transport, model: *model, workspace: root, prompt: flags.Arg(0)}, nil
+}
+
+func parseTUIConfig(args []string) (config, error) {
+	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	provider := flags.String("provider", "", "provider: openai, anthropic, or opencode")
+	transport := flags.String("transport", opencode.TransportResponses, "OpenCode transport: responses or chat-completions")
+	model := flags.String("model", "", "model name")
+	workspaceRoot := flags.String("workspace", "", "workspace root")
+	if err := flags.Parse(args); err != nil {
+		return config{}, err
+	}
+	if flags.NArg() != 0 {
+		return config{}, errors.New("usage: symphony --provider PROVIDER --model MODEL [--workspace PATH]")
+	}
+	if *provider != "openai" && *provider != "anthropic" && *provider != "opencode" {
+		return config{}, errors.New("provider must be openai, anthropic, or opencode")
+	}
+	if *provider == "opencode" && *transport != opencode.TransportResponses && *transport != opencode.TransportChat {
+		return config{}, errors.New("OpenCode transport must be responses or chat-completions")
+	}
+	if strings.TrimSpace(*model) == "" {
+		return config{}, errors.New("model is required")
+	}
+	root := *workspaceRoot
+	if root == "" {
+		var err error
+		root, err = os.Getwd()
+		if err != nil {
+			return config{}, fmt.Errorf("get working directory: %w", err)
+		}
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return config{}, fmt.Errorf("resolve workspace path: %w", err)
+	}
+	return config{provider: *provider, transport: *transport, model: *model, workspace: root}, nil
 }
 
 func promptApproval(input io.Reader, output io.Writer, pending *agent.PendingApproval) (bool, error) {

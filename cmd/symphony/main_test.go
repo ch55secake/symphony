@@ -231,6 +231,37 @@ func TestParseConfigValidatesRunArguments(t *testing.T) {
 	}
 }
 
+func TestParseTUIConfigValidatesArguments(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{
+		{"--provider", "other", "--model", "test"},
+		{"--provider", "opencode", "--transport", "other", "--model", "test"},
+		{"--provider", "openai"},
+		{"--provider", "openai", "--model", "test", "unexpected"},
+	} {
+		if _, err := parseTUIConfig(args); err == nil {
+			t.Fatalf("parseTUIConfig(%q) error = nil", args)
+		}
+	}
+	config, err := parseTUIConfig([]string{"--provider", "opencode", "--transport", "chat-completions", "--model", "kimi-test", "--workspace", root})
+	if err != nil || config.workspace != root || config.transport != "chat-completions" {
+		t.Fatalf("parseTUIConfig() = %#v, %v", config, err)
+	}
+}
+
+func TestExecuteDefaultsToTUI(t *testing.T) {
+	var received config
+	err := execute(context.Background(), []string{"--provider", "openai", "--model", "test"}, strings.NewReader(""), ioDiscard{}, func(config config) (*runtime, error) {
+		received = config
+		return nil, errors.New("stop before TUI")
+	}, func(string) (replayReader, error) {
+		return nil, errors.New("unexpected replay")
+	})
+	if err == nil || err.Error() != "stop before TUI" || received.provider != "openai" || received.model != "test" {
+		t.Fatalf("execute() error = %v, config = %#v", err, received)
+	}
+}
+
 func TestNewProviderUsesOpenCodeAPIKey(t *testing.T) {
 	t.Setenv("OPENCODE_API_KEY", "test-key")
 	provider, err := newProvider("opencode", "responses")

@@ -40,6 +40,9 @@ type ApprovalTool interface {
 type LoopResult struct {
 	Completion *Completion
 	Pending    *PendingApproval
+	// Messages retains the in-memory conversation, including transient tool
+	// results, so an interactive caller can continue the same session.
+	Messages []Message
 }
 
 // PendingApproval exposes safe metadata while retaining execution data in memory only.
@@ -180,7 +183,10 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 			return LoopResult{}, err
 		}
 		if len(completion.ToolCalls) == 0 {
-			return LoopResult{Completion: &completion}, nil
+			return LoopResult{Completion: &completion, Messages: append(current.Messages, Message{
+				Role:    RoleAssistant,
+				Content: completion.Content,
+			})}, nil
 		}
 		if round >= l.maxToolRounds {
 			return LoopResult{}, ErrMaxToolRounds
@@ -188,7 +194,7 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 		if pending, ok, err := l.requestApproval(ctx, handle, actor, current, completion, round); err != nil {
 			return LoopResult{}, err
 		} else if ok {
-			return LoopResult{Pending: pending}, nil
+			return LoopResult{Pending: pending, Messages: pending.continuation.Messages}, nil
 		}
 
 		results := make([]ToolResult, 0, len(completion.ToolCalls))

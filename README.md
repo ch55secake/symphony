@@ -156,3 +156,19 @@ without invoking a provider or repeating side effects:
 KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' \
   go run ./cmd/symphony replay SESSION_ID
 ```
+
+## Interactive TUI
+
+Start a multi-turn session in the terminal UI with the same provider and workspace
+configuration as `run`:
+
+```sh
+KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENCODE_API_KEY='...' \
+  go run ./cmd/symphony --provider opencode --model gpt-5.6-terra --workspace .
+```
+
+Use `Ctrl+Enter` to send a multiline prompt. The TUI retains conversation and tool
+context in memory for the current session. Write and command requests remain paused
+until explicitly approved with `y` or denied with `n` or `Esc`; the interface shows
+only the existing safe summary and hash. Use `Ctrl+Q` to finish the session or
+`Ctrl+C` to cancel it.

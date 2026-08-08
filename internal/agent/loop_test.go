@@ -94,6 +94,43 @@ func TestLoopReadsFileAndContinuesTurn(t *testing.T) {
 	}
 }
 
+func TestLoopResultRetainsConversationForNextTurn(t *testing.T) {
+	t.Parallel()
+	store := &recordingStore{}
+	sessions := session.New(store, audit.DefaultPolicy())
+	handle, err := sessions.Start(context.Background(), "user", "/workspace")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	turns, err := New(sessions)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	loop, err := NewLoop(turns, nil, 1)
+	if err != nil {
+		t.Fatalf("NewLoop() error = %v", err)
+	}
+	provider := &sequentialProvider{completions: []Completion{{Content: "first reply"}, {Content: "second reply"}}}
+
+	first, err := loop.RunWithApproval(context.Background(), handle, "user", provider, CompletionRequest{
+		Model:    "test-model",
+		Messages: []Message{{Role: RoleUser, Content: "first prompt"}},
+	})
+	if err != nil || first.Completion == nil || len(first.Messages) != 2 {
+		t.Fatalf("first result = %#v, error = %v", first, err)
+	}
+	second, err := loop.RunWithApproval(context.Background(), handle, "user", provider, CompletionRequest{
+		Model:    "test-model",
+		Messages: append(first.Messages, Message{Role: RoleUser, Content: "second prompt"}),
+	})
+	if err != nil || second.Completion == nil || len(second.Messages) != 4 {
+		t.Fatalf("second result = %#v, error = %v", second, err)
+	}
+	if provider.calls[1].Messages[0].Content != "first prompt" || provider.calls[1].Messages[1].Content != "first reply" {
+		t.Fatalf("second request messages = %#v, want retained conversation", provider.calls[1].Messages)
+	}
+}
+
 func TestLoopRecordsUnknownToolAndStops(t *testing.T) {
 	t.Parallel()
 	store := &recordingStore{}
