@@ -99,6 +99,25 @@ func TestSetupSelectsProviderAndRequiresModel(t *testing.T) {
 	}
 }
 
+func TestSetupAcceptsConnectCommand(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newSetupModel(ctx, cancel, SetupConfig{Workspace: "/workspace"}, func(context.Context, string, string) ([]string, error) { return nil, nil })
+	if !m.command.Focused() {
+		t.Fatal("command input is not focused")
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/connect")})
+	m = updated.(setupModel)
+	if m.command.Value() != "/connect" {
+		t.Fatalf("command = %q", m.command.Value())
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(setupModel)
+	if m.stage != setupConnect || !m.apiKey.Focused() {
+		t.Fatalf("model = %#v; expected focused connection form", m)
+	}
+}
+
 func TestSetupDisplaysDiscoveredModels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

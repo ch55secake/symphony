@@ -89,6 +89,7 @@ func newSetupModel(ctx context.Context, cancel context.CancelFunc, config SetupC
 	command := textinput.New()
 	command.Prompt = "> "
 	command.Placeholder = "/connect"
+	command.Focus()
 	apiKey := textinput.New()
 	apiKey.Prompt = "API key: "
 	apiKey.Placeholder = "Paste provider API key"
@@ -111,7 +112,7 @@ func newSetupModel(ctx context.Context, cancel context.CancelFunc, config SetupC
 }
 
 func (m setupModel) Init() tea.Cmd {
-	return m.command.Focus()
+	return nil
 }
 
 func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

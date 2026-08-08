@@ -83,6 +83,7 @@ func newModel(ctx context.Context, cancel context.CancelFunc, config Config, run
 	input.ShowLineNumbers = false
 	input.CharLimit = 32 << 10
 	input.SetHeight(4)
+	input.Focus()
 	return model{
 		ctx:      ctx,
 		cancel:   cancel,
@@ -94,7 +95,7 @@ func newModel(ctx context.Context, cancel context.CancelFunc, config Config, run
 }
 
 func (m model) Init() tea.Cmd {
-	return m.input.Focus()
+	return nil
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
