@@ -197,8 +197,7 @@ fetches the models available to that provider, and saves the selected provider, 
 and model in the user configuration file. The TUI always uses the current directory as
 the workspace.
 
-Use `Ctrl+S` to send a multiline prompt; `Ctrl+Enter` and `Ctrl+J` also work in terminals
-that report them distinctly. The TUI retains conversation and tool
+Use `Enter` to send a prompt. The TUI retains conversation and tool
 context in memory for the current session. Write and command requests remain paused
 until explicitly approved with `y` or denied with `n` or `Esc`; the interface shows
 only the existing safe summary and hash. Use `Ctrl+Q` to finish the session or

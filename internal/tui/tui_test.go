@@ -58,14 +58,22 @@ func TestSubmitRetainsConversationAndRendersResponses(t *testing.T) {
 	}
 }
 
-func TestSubmitKeysSupportTerminalVariants(t *testing.T) {
-	for _, key := range []string{"ctrl+s", "ctrl+j", "ctrl+enter"} {
-		if !isSubmitKey(key) {
-			t.Fatalf("isSubmitKey(%q) = false", key)
-		}
+func TestEnterSubmitsAndRendersUserMessage(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := &fakeRunner{turnResult: agent.LoopResult{Completion: &agent.Completion{Content: "reply"}, Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}, {Role: agent.RoleAssistant, Content: "reply"}}}}
+	m := newModel(ctx, cancel, Config{Provider: "test", Model: "model", Workspace: "/workspace", SessionID: "session"}, runner)
+	m.width, m.height = 100, 30
+	m.input.SetValue("hello")
+	updated, command := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if !m.busy || !strings.Contains(m.View(), "hello") {
+		t.Fatalf("model = %#v; expected queued, visible user message", m)
 	}
-	if isSubmitKey("enter") {
-		t.Fatal("plain Enter must preserve multiline input")
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.busy || !strings.Contains(m.View(), "reply") {
+		t.Fatalf("model = %#v; expected rendered provider reply", m)
 	}
 }
 
