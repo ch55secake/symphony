@@ -12,6 +12,7 @@ import (
 
 	"github.com/ch55secake/symphony/internal/agent"
 	"github.com/ch55secake/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/providers"
 )
 
 const (
@@ -39,9 +40,13 @@ type Provider struct {
 // Error is a safe representation of a non-successful Anthropic response.
 type Error struct {
 	StatusCode int
+	Detail     string
 }
 
 func (e *Error) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("Anthropic response returned HTTP %d: %s", e.StatusCode, e.Detail)
+	}
 	return fmt.Sprintf("Anthropic response returned HTTP %d", e.StatusCode)
 }
 
@@ -90,9 +95,9 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 	if err != nil {
 		return agent.Completion{}, fmt.Errorf("send Anthropic request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return agent.Completion{}, &Error{StatusCode: response.StatusCode}
+		return agent.Completion{}, &Error{StatusCode: response.StatusCode, Detail: providers.ErrorDetail(response.Body, p.apiKey)}
 	}
 
 	var responsePayload messagesResponse

@@ -182,3 +182,28 @@ without invoking a provider or repeating side effects:
 KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' \
   go run ./cmd/symphony replay SESSION_ID
 ```
+
+## Interactive TUI
+
+Start a multi-turn session from the workspace you want Symphony to use:
+
+```sh
+go run ./cmd/symphony
+```
+
+`go run ./cmd/symphony tui` is an equivalent explicit alias.
+
+Symphony starts or reuses a local `symphony-kurrentdb` Docker container before opening
+the TUI. The centered splash accepts `/connect`, which collects a provider API key,
+fetches the models available to that provider, and saves the selected provider, key,
+and model in the user configuration file. The TUI always uses the current directory as
+the workspace.
+
+Choose `opencode-go` for an OpenCode Go subscription. It uses the Go model catalog and
+endpoint, which are separate from pay-as-you-go OpenCode Zen billing.
+
+Use `Enter` to send a prompt. The TUI retains conversation and tool
+context in memory for the current session. Write and command requests remain paused
+until explicitly approved with `y` or denied with `n` or `Esc`; the interface shows
+only the existing safe summary and hash. Use `Ctrl+Q` to finish the session or
+`Ctrl+C` to cancel it.

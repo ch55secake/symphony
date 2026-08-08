@@ -13,7 +13,9 @@ import (
 	"github.com/ch55secake/symphony/internal/audit"
 	appconfig "github.com/ch55secake/symphony/internal/config"
 	"github.com/ch55secake/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/providers/opencode"
 	"github.com/ch55secake/symphony/internal/session"
+	"github.com/ch55secake/symphony/internal/tui"
 	"github.com/ch55secake/symphony/internal/workspace"
 	"github.com/google/uuid"
 )
@@ -218,17 +220,62 @@ func TestParseConfigValidatesRunArguments(t *testing.T) {
 		{"run", "--provider", "openai", "--model", "test"},
 	}
 	for _, args := range tests {
-		if _, err := parseConfig(args); err == nil {
+		if _, err := parseConfigWithSettings(args, appconfig.Settings{}); err == nil {
 			t.Fatalf("parseConfig(%q) error = nil", args)
 		}
 	}
-	config, err := parseConfig([]string{"run", "--provider", "anthropic", "--model", "test", "--workspace", root, "hello"})
+	config, err := parseConfigWithSettings([]string{"run", "--provider", "anthropic", "--model", "test", "--workspace", root, "hello"}, appconfig.Settings{})
 	if err != nil || config.workspace != root || config.prompt != "hello" {
 		t.Fatalf("parseConfig() = %#v, %v", config, err)
 	}
-	config, err = parseConfig([]string{"run", "--provider", "opencode", "--transport", "chat-completions", "--model", "kimi-test", "--workspace", root, "hello"})
+	config, err = parseConfigWithSettings([]string{"run", "--provider", "opencode", "--transport", "chat-completions", "--model", "kimi-test", "--workspace", root, "hello"}, appconfig.Settings{})
 	if err != nil || config.transport != "chat-completions" {
 		t.Fatalf("parseConfig() = %#v, %v", config, err)
+	}
+}
+
+func TestConfigFromTUIUsesSelectionAndLocalKurrentDB(t *testing.T) {
+	settings := appconfig.Settings{
+		Transport:       "responses",
+		OpenAIAPIKey:    "configured-key",
+		AnthropicAPIKey: "anthropic-key",
+	}
+	parsed, err := configFromTUI(tui.SetupConfig{Provider: "anthropic", Model: "selected-model", Workspace: "/workspace", APIKey: "selected-key"}, settings)
+	if err != nil {
+		t.Fatalf("configFromTUI() error = %v", err)
+	}
+	if parsed.provider != "anthropic" || parsed.model != "selected-model" || parsed.workspace != "/workspace" || parsed.connectionString != localKurrentDBURL || parsed.apiKey != "selected-key" {
+		t.Fatalf("configFromTUI() = %#v", parsed)
+	}
+}
+
+func TestConfigFromTUIValidatesSelection(t *testing.T) {
+	for _, selected := range []tui.SetupConfig{
+		{Provider: "other", Model: "model", Workspace: "/workspace"},
+		{Provider: "openai", Workspace: "/workspace"},
+	} {
+		if _, err := configFromTUI(selected, appconfig.Settings{}); err == nil {
+			t.Fatalf("configFromTUI(%#v) error = nil", selected)
+		}
+	}
+	if _, err := configFromTUI(tui.SetupConfig{Provider: "opencode", Model: "model", Workspace: "/workspace"}, appconfig.Settings{Transport: "invalid"}); err == nil {
+		t.Fatal("configFromTUI() error = nil for invalid OpenCode transport")
+	}
+}
+
+func TestConfigFromTUIConfiguresOpenCodeGoTransports(t *testing.T) {
+	for _, test := range []struct {
+		model     string
+		transport string
+	}{
+		{model: "gpt-5.6-luna", transport: opencode.TransportResponses},
+		{model: "minimax-m3", transport: "messages"},
+		{model: "kimi-k2.7-code", transport: opencode.TransportChat},
+	} {
+		parsed, err := configFromTUI(tui.SetupConfig{Provider: "opencode-go", Model: test.model, Workspace: "/workspace", APIKey: "test-key"}, appconfig.Settings{})
+		if err != nil || parsed.transport != test.transport || parsed.apiKey != "test-key" {
+			t.Fatalf("configFromTUI(%q) = %#v, %v", test.model, parsed, err)
+		}
 	}
 }
 

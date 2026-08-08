@@ -48,3 +48,38 @@ func TestLoadFileAllowsMissingFile(t *testing.T) {
 		t.Fatalf("transport = %q, want responses", settings.Transport)
 	}
 }
+
+func TestSaveConnectionPreservesExistingSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("transport: chat-completions\nworkspace: /workspace\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := saveConnection(path, "opencode", "test-key", "kimi-test"); err != nil {
+		t.Fatalf("saveConnection() error = %v", err)
+	}
+	settings, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if settings.Provider != "opencode" || settings.Model != "kimi-test" || settings.OpenCodeAPIKey != "test-key" || settings.Transport != "chat-completions" || settings.Workspace != "/workspace" {
+		t.Fatalf("settings = %#v", settings)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("config permissions = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestSaveConnectionUsesOpenCodeKeyForGo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := saveConnection(path, "opencode-go", "test-key", "gpt-5.6-luna"); err != nil {
+		t.Fatalf("saveConnection() error = %v", err)
+	}
+	settings, err := LoadFile(path)
+	if err != nil || settings.Provider != "opencode-go" || settings.OpenCodeAPIKey != "test-key" || settings.Model != "gpt-5.6-luna" {
+		t.Fatalf("LoadFile() = %#v, %v", settings, err)
+	}
+}

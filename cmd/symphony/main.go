@@ -19,16 +19,21 @@ import (
 	"github.com/ch55secake/symphony/internal/audit"
 	appconfig "github.com/ch55secake/symphony/internal/config"
 	"github.com/ch55secake/symphony/internal/events"
+	"github.com/ch55secake/symphony/internal/kurrent"
+	"github.com/ch55secake/symphony/internal/models"
 	"github.com/ch55secake/symphony/internal/providers/anthropic"
 	"github.com/ch55secake/symphony/internal/providers/openai"
 	"github.com/ch55secake/symphony/internal/providers/opencode"
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/store/kurrentdb"
+	"github.com/ch55secake/symphony/internal/tui"
 	"github.com/ch55secake/symphony/internal/workspace"
 	"github.com/google/uuid"
 )
 
 const actor = "cli"
+
+const localKurrentDBURL = "kurrentdb://localhost:2113?tls=false"
 
 type config struct {
 	provider         string
@@ -50,6 +55,8 @@ type runtime struct {
 
 type runtimeFactory func(config) (*runtime, error)
 
+type kurrentStarter func(context.Context) error
+
 type replayReader interface {
 	Read(context.Context, uuid.UUID) ([]events.Event, error)
 	Close() error
@@ -68,16 +75,109 @@ func main() {
 
 func execute(ctx context.Context, args []string, input io.Reader, output io.Writer, factory runtimeFactory, replayFactory replayFactory) error {
 	if len(args) == 0 {
-		return errors.New("usage: symphony run|replay")
+		return runTUI(ctx, factory, kurrent.Start)
 	}
 	switch args[0] {
 	case "run":
 		return run(ctx, args, input, output, factory)
+	case "tui":
+		if len(args) != 1 {
+			return errors.New("TUI settings are configured interactively")
+		}
+		return runTUI(ctx, factory, kurrent.Start)
 	case "replay":
 		return replay(ctx, args[1:], output, replayFactory)
 	default:
-		return errors.New("usage: symphony run|replay")
+		return errors.New("usage: symphony [tui|run|replay]")
 	}
+}
+
+func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentStarter) error {
+	workspace, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		return fmt.Errorf("resolve workspace path: %w", err)
+	}
+	if err := tui.WaitForKurrent(ctx, startKurrent); err != nil {
+		if errors.Is(err, tui.ErrCanceled) {
+			return nil
+		}
+		return err
+	}
+	settings, err := appconfig.Load()
+	if err != nil {
+		return err
+	}
+	selected, err := tui.Select(ctx, tui.SetupConfig{
+		Provider:  settings.Provider,
+		Model:     settings.Model,
+		Workspace: workspace,
+		APIKey:    providerAPIKey(settings.Provider, settings),
+	}, func(ctx context.Context, provider, apiKey string) ([]string, error) {
+		return models.List(ctx, models.Config{Provider: provider, APIKey: apiKey})
+	})
+	if errors.Is(err, tui.ErrCanceled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	config, err := configFromTUI(selected, settings)
+	if err != nil {
+		return err
+	}
+	if err := appconfig.SaveConnection(selected.Provider, selected.APIKey, selected.Model); err != nil {
+		return err
+	}
+	runtime, err := factory(config)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = runtime.close() }()
+
+	handle, err := runtime.sessions.Start(ctx, actor, config.workspace)
+	if err != nil {
+		return err
+	}
+	err = tui.Run(ctx, tui.Config{
+		Provider:  config.provider,
+		Model:     config.model,
+		Workspace: config.workspace,
+		SessionID: handle.SessionID.String(),
+	}, tuiRunner{runtime: runtime, handle: handle, config: config})
+	if err != nil {
+		reason := failureReason(ctx)
+		if errors.Is(err, tui.ErrCanceled) {
+			reason = "canceled"
+		}
+		_ = runtime.sessions.Fail(context.WithoutCancel(ctx), handle, actor, reason)
+		return err
+	}
+	return runtime.sessions.Finish(ctx, handle, actor, "quit")
+}
+
+type tuiRunner struct {
+	runtime *runtime
+	handle  *session.Handle
+	config  config
+}
+
+func (r tuiRunner) Turn(ctx context.Context, messages []agent.Message) (agent.LoopResult, error) {
+	return r.runtime.loop.RunWithApproval(ctx, r.handle, actor, r.runtime.provider, agent.CompletionRequest{
+		Model:    r.config.model,
+		Messages: messages,
+		Tools:    r.runtime.tools,
+	})
+}
+
+func (r tuiRunner) Resolve(ctx context.Context, pending *agent.PendingApproval, approved bool) (agent.LoopResult, error) {
+	if approved {
+		return r.runtime.loop.Approve(ctx, r.handle, actor, r.runtime.provider, pending)
+	}
+	return r.runtime.loop.Deny(ctx, r.handle, actor, r.runtime.provider, pending, "user_denied")
 }
 
 func run(ctx context.Context, args []string, input io.Reader, output io.Writer, factory runtimeFactory) error {
@@ -89,7 +189,7 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer, 
 	if err != nil {
 		return err
 	}
-	defer runtime.close()
+	defer func() { _ = runtime.close() }()
 
 	handle, err := runtime.sessions.Start(ctx, actor, config.workspace)
 	if err != nil {
@@ -189,11 +289,8 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 	if flags.NArg() != 1 || strings.TrimSpace(flags.Arg(0)) == "" {
 		return config{}, errors.New("a prompt is required")
 	}
-	if *provider != "openai" && *provider != "anthropic" && *provider != "opencode" {
-		return config{}, errors.New("provider must be openai, anthropic, or opencode")
-	}
-	if *provider == "opencode" && *transport != opencode.TransportResponses && *transport != opencode.TransportChat {
-		return config{}, errors.New("OpenCode transport must be responses or chat-completions")
+	if err := validateProviderTransport(*provider, *transport); err != nil {
+		return config{}, err
 	}
 	if strings.TrimSpace(*model) == "" {
 		return config{}, errors.New("model is required")
@@ -219,6 +316,48 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 		connectionString: settings.KurrentDBURL,
 		apiKey:           providerAPIKey(*provider, settings),
 	}, nil
+}
+
+func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (config, error) {
+	transport := settings.Transport
+	if transport == "" {
+		transport = opencode.TransportResponses
+	}
+	if selected.Provider == "opencode-go" {
+		transport = openCodeGoTransport(selected.Model)
+	}
+	if err := validateProviderTransport(selected.Provider, transport); err != nil {
+		return config{}, err
+	}
+	if strings.TrimSpace(selected.Model) == "" {
+		return config{}, errors.New("model is required")
+	}
+	return config{
+		provider:         selected.Provider,
+		transport:        transport,
+		model:            selected.Model,
+		workspace:        selected.Workspace,
+		connectionString: localKurrentDBURL,
+		apiKey:           strings.TrimSpace(selected.APIKey),
+	}, nil
+}
+
+func validateProviderTransport(provider, transport string) error {
+	switch provider {
+	case "openai", "anthropic":
+		return nil
+	case "opencode":
+		if transport == opencode.TransportResponses || transport == opencode.TransportChat {
+			return nil
+		}
+	case "opencode-go":
+		if transport == opencode.TransportResponses || transport == opencode.TransportChat || transport == "messages" {
+			return nil
+		}
+	default:
+		return errors.New("provider must be openai, anthropic, opencode, or opencode-go")
+	}
+	return errors.New("OpenCode transport must be responses or chat-completions")
 }
 
 func promptApproval(input io.Reader, output io.Writer, pending *agent.PendingApproval) (bool, error) {
@@ -302,7 +441,7 @@ func providerAPIKey(provider string, settings appconfig.Settings) string {
 		return settings.OpenAIAPIKey
 	case "anthropic":
 		return settings.AnthropicAPIKey
-	case "opencode":
+	case "opencode", "opencode-go":
 		return settings.OpenCodeAPIKey
 	default:
 		return ""
@@ -310,6 +449,7 @@ func providerAPIKey(provider string, settings appconfig.Settings) string {
 }
 
 func newProvider(name, transport, apiKey string) (agent.Provider, error) {
+	apiKey = strings.TrimSpace(apiKey)
 	switch name {
 	case "openai":
 		return openai.New(openai.Config{APIKey: apiKey})
@@ -317,7 +457,23 @@ func newProvider(name, transport, apiKey string) (agent.Provider, error) {
 		return anthropic.New(anthropic.Config{APIKey: apiKey})
 	case "opencode":
 		return opencode.New(opencode.Config{APIKey: apiKey, Transport: transport})
+	case "opencode-go":
+		if transport == "messages" {
+			return anthropic.New(anthropic.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go"})
+		}
+		return opencode.New(opencode.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go/v1", Transport: transport})
 	default:
 		return nil, errors.New("provider must be openai, anthropic, or opencode")
+	}
+}
+
+func openCodeGoTransport(model string) string {
+	switch model {
+	case "gpt-5.6-luna":
+		return opencode.TransportResponses
+	case "minimax-m3", "minimax-m2.7", "minimax-m2.5", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus":
+		return "messages"
+	default:
+		return opencode.TransportChat
 	}
 }
