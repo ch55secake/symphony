@@ -136,7 +136,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case turnResultMsg:
 		m.busy = false
 		if msg.err != nil {
-			m.err = msg.err
+			m.err = displayError(msg.err)
 			return m, nil
 		}
 		m.err = nil
@@ -152,6 +152,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var command tea.Cmd
 	m.input, command = m.input.Update(msg)
 	return m, command
+}
+
+func displayError(err error) error {
+	if strings.Contains(err.Error(), "HTTP 401") {
+		return errors.New("provider rejected the API key; restart Symphony and run /connect")
+	}
+	return err
 }
 
 func (m model) submit() (tea.Model, tea.Cmd) {

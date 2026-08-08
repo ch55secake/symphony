@@ -27,7 +27,8 @@ type Config struct {
 
 // List returns model IDs available to the configured provider.
 func List(ctx context.Context, config Config) ([]string, error) {
-	if strings.TrimSpace(config.APIKey) == "" {
+	apiKey := strings.TrimSpace(config.APIKey)
+	if apiKey == "" {
 		return nil, errors.New("provider API key is required")
 	}
 	baseURL := strings.TrimRight(config.BaseURL, "/")
@@ -48,10 +49,10 @@ func List(ctx context.Context, config Config) ([]string, error) {
 		return nil, fmt.Errorf("create model request: %w", err)
 	}
 	if config.Provider == "anthropic" {
-		request.Header.Set("x-api-key", config.APIKey)
+		request.Header.Set("x-api-key", apiKey)
 		request.Header.Set("anthropic-version", "2023-06-01")
 	} else {
-		request.Header.Set("Authorization", "Bearer "+config.APIKey)
+		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	client := config.HTTPClient
 	if client == nil {

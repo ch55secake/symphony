@@ -341,7 +341,7 @@ func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (confi
 		model:            selected.Model,
 		workspace:        selected.Workspace,
 		connectionString: localKurrentDBURL,
-		apiKey:           selected.APIKey,
+		apiKey:           strings.TrimSpace(selected.APIKey),
 	}, nil
 }
 
@@ -434,6 +434,7 @@ func providerAPIKey(provider string, settings appconfig.Settings) string {
 }
 
 func newProvider(name, transport, apiKey string) (agent.Provider, error) {
+	apiKey = strings.TrimSpace(apiKey)
 	switch name {
 	case "openai":
 		return openai.New(openai.Config{APIKey: apiKey})

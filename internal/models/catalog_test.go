@@ -16,7 +16,7 @@ func TestListUsesProviderAuthenticationAndSortsModels(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"data":[{"id":"z-model"},{"id":"a-model"}]}`))
 	}))
 	defer server.Close()
-	listed, err := List(context.Background(), Config{Provider: "openai", APIKey: "test-key", BaseURL: server.URL})
+	listed, err := List(context.Background(), Config{Provider: "openai", APIKey: " test-key\n", BaseURL: server.URL})
 	if err != nil || len(listed) != 2 || listed[0] != "a-model" || listed[1] != "z-model" {
 		t.Fatalf("List() = %#v, %v", listed, err)
 	}

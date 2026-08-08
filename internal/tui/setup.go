@@ -49,7 +49,7 @@ func Select(ctx context.Context, config SetupConfig, listModels ModelLister) (Se
 	if final.stage != setupModels || len(final.models) == 0 {
 		return SetupConfig{}, errors.New("provider connection was not completed")
 	}
-	return SetupConfig{Provider: final.provider(), Model: final.models[final.selected], Workspace: final.workspace, APIKey: final.apiKey.Value()}, nil
+	return SetupConfig{Provider: final.provider(), Model: final.models[final.selected], Workspace: final.workspace, APIKey: strings.TrimSpace(final.apiKey.Value())}, nil
 }
 
 type setupStage int
@@ -157,7 +157,7 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.loading = true
 				m.err = ""
-				provider, apiKey := m.provider(), m.apiKey.Value()
+				provider, apiKey := m.provider(), strings.TrimSpace(m.apiKey.Value())
 				return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
 					models, err := m.listModels(m.ctx, provider, apiKey)
 					return modelListMsg{models: models, err: err}
