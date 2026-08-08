@@ -239,11 +239,11 @@ func TestConfigFromTUIUsesSelectionAndLocalKurrentDB(t *testing.T) {
 		OpenAIAPIKey:    "configured-key",
 		AnthropicAPIKey: "anthropic-key",
 	}
-	parsed, err := configFromTUI(tui.SetupConfig{Provider: "anthropic", Model: "selected-model", Workspace: "/workspace"}, settings)
+	parsed, err := configFromTUI(tui.SetupConfig{Provider: "anthropic", Model: "selected-model", Workspace: "/workspace", APIKey: "selected-key"}, settings)
 	if err != nil {
 		t.Fatalf("configFromTUI() error = %v", err)
 	}
-	if parsed.provider != "anthropic" || parsed.model != "selected-model" || parsed.workspace != "/workspace" || parsed.connectionString != localKurrentDBURL || parsed.apiKey != "anthropic-key" {
+	if parsed.provider != "anthropic" || parsed.model != "selected-model" || parsed.workspace != "/workspace" || parsed.connectionString != localKurrentDBURL || parsed.apiKey != "selected-key" {
 		t.Fatalf("configFromTUI() = %#v", parsed)
 	}
 }

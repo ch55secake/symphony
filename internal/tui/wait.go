@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // WaitForKurrent shows startup progress until the local database is ready.
@@ -45,6 +46,7 @@ type waitModel struct {
 	canceled bool
 	err      error
 	width    int
+	height   int
 }
 
 func newWaitModel(ctx context.Context, cancel context.CancelFunc, start func(context.Context) error) waitModel {
@@ -62,7 +64,7 @@ func (m waitModel) Init() tea.Cmd {
 func (m waitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" || msg.String() == "esc" {
@@ -85,5 +87,6 @@ func (m waitModel) View() string {
 	if m.width == 0 {
 		return "Starting Symphony..."
 	}
-	return titleStyle.Render("SYMPHONY") + "\n\n" + m.spinner.View() + " Starting local KurrentDB...\n" + subtleStyle.Render("This can take a moment the first time the container image is pulled.") + "\n\n" + subtleStyle.Render("Ctrl+C cancels.")
+	content := titleStyle.Render("SYMPHONY") + "\n\n" + m.spinner.View() + " Starting local KurrentDB...\n" + subtleStyle.Render("This can take a moment the first time the container image is pulled.") + "\n\n" + subtleStyle.Render("Ctrl+C cancels.")
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }

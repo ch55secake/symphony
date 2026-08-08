@@ -25,11 +25,25 @@ type Settings struct {
 
 // Load reads the user configuration file and applies environment overrides.
 func Load() (Settings, error) {
+	path, err := configPath()
+	if err != nil {
+		return Settings{}, err
+	}
+	return LoadFile(path)
+}
+
+// Path returns the user configuration file path.
+func Path() string {
+	path, _ := configPath()
+	return path
+}
+
+func configPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
-		return Settings{}, fmt.Errorf("get user config directory: %w", err)
+		return "", fmt.Errorf("get user config directory: %w", err)
 	}
-	return LoadFile(filepath.Join(dir, "symphony", "config.yaml"))
+	return filepath.Join(dir, "symphony", "config.yaml"), nil
 }
 
 // LoadFile reads configuration from path and applies environment overrides. An absent file
@@ -58,4 +72,47 @@ func LoadFile(path string) (Settings, error) {
 		AnthropicAPIKey: v.GetString("anthropic_api_key"),
 		OpenCodeAPIKey:  v.GetString("opencode_api_key"),
 	}, nil
+}
+
+// SaveConnection persists a provider, its API key, and the selected model.
+func SaveConnection(provider, apiKey, model string) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	return saveConnection(path, provider, apiKey, model)
+}
+
+func saveConnection(path, provider, apiKey, model string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.Is(err, os.ErrNotExist) && !errors.As(err, &notFound) {
+			return fmt.Errorf("read configuration: %w", err)
+		}
+	}
+	v.Set("provider", provider)
+	v.Set("model", model)
+	switch provider {
+	case "openai":
+		v.Set("openai_api_key", apiKey)
+	case "anthropic":
+		v.Set("anthropic_api_key", apiKey)
+	case "opencode":
+		v.Set("opencode_api_key", apiKey)
+	default:
+		return fmt.Errorf("unknown provider %q", provider)
+	}
+	if err := v.WriteConfigAs(path); err != nil {
+		return fmt.Errorf("write configuration: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("restrict config permissions: %w", err)
+	}
+	return nil
 }

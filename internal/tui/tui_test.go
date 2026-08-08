@@ -84,8 +84,9 @@ func TestApprovalViewDoesNotRenderToolResultContent(t *testing.T) {
 func TestSetupSelectsProviderAndRequiresModel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m := newSetupModel(ctx, cancel, SetupConfig{Provider: "openai", Workspace: "/workspace"})
+	m := newSetupModel(ctx, cancel, SetupConfig{Provider: "openai", Workspace: "/workspace"}, func(context.Context, string, string) ([]string, error) { return nil, nil })
 	m.width = 100
+	m.stage = setupConnect
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(setupModel)
 	if m.provider() != "anthropic" {
@@ -93,8 +94,21 @@ func TestSetupSelectsProviderAndRequiresModel(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(setupModel)
-	if m.err != "A model is required." {
+	if m.err != "An API key is required to connect." {
 		t.Fatalf("error = %q", m.err)
+	}
+}
+
+func TestSetupDisplaysDiscoveredModels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newSetupModel(ctx, cancel, SetupConfig{Provider: "openai", Model: "gpt-test", APIKey: "test-key", Workspace: "/workspace"}, func(context.Context, string, string) ([]string, error) { return []string{"gpt-other", "gpt-test"}, nil })
+	m.width, m.height = 100, 30
+	m.stage = setupConnect
+	updated, _ := m.Update(modelListMsg{models: []string{"gpt-other", "gpt-test"}})
+	m = updated.(setupModel)
+	if m.stage != setupModels || m.models[m.selected] != "gpt-test" || !strings.Contains(m.View(), "SELECT MODEL") {
+		t.Fatalf("model = %#v", m)
 	}
 }
 

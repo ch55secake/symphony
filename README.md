@@ -192,9 +192,10 @@ go run ./cmd/symphony
 ```
 
 Symphony starts or reuses a local `symphony-kurrentdb` Docker container before opening
-the TUI. The setup screen selects the provider and model; it always uses the current
-directory as the workspace. Provider credentials may be supplied through the existing
-configuration file or environment variables.
+the TUI. The centered splash accepts `/connect`, which collects a provider API key,
+fetches the models available to that provider, and saves the selected provider, key,
+and model in the user configuration file. The TUI always uses the current directory as
+the workspace.
 
 Use `Ctrl+Enter` to send a multiline prompt. The TUI retains conversation and tool
 context in memory for the current session. Write and command requests remain paused

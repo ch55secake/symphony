@@ -20,6 +20,7 @@ import (
 	appconfig "github.com/ch55secake/symphony/internal/config"
 	"github.com/ch55secake/symphony/internal/events"
 	"github.com/ch55secake/symphony/internal/kurrent"
+	"github.com/ch55secake/symphony/internal/models"
 	"github.com/ch55secake/symphony/internal/providers/anthropic"
 	"github.com/ch55secake/symphony/internal/providers/openai"
 	"github.com/ch55secake/symphony/internal/providers/opencode"
@@ -114,11 +115,17 @@ func runTUI(ctx context.Context, factory runtimeFactory, startKurrent kurrentSta
 		Provider:  settings.Provider,
 		Model:     settings.Model,
 		Workspace: workspace,
+		APIKey:    providerAPIKey(settings.Provider, settings),
+	}, func(ctx context.Context, provider, apiKey string) ([]string, error) {
+		return models.List(ctx, models.Config{Provider: provider, APIKey: apiKey})
 	})
 	if errors.Is(err, tui.ErrCanceled) {
 		return nil
 	}
 	if err != nil {
+		return err
+	}
+	if err := appconfig.SaveConnection(selected.Provider, selected.APIKey, selected.Model); err != nil {
 		return err
 	}
 	config, err := configFromTUI(selected, settings)
@@ -334,7 +341,7 @@ func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (confi
 		model:            selected.Model,
 		workspace:        selected.Workspace,
 		connectionString: localKurrentDBURL,
-		apiKey:           providerAPIKey(selected.Provider, settings),
+		apiKey:           selected.APIKey,
 	}, nil
 }
 
