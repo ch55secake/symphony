@@ -125,7 +125,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.busy && (msg.String() == "ctrl+q" || msg.String() == "esc") && strings.TrimSpace(m.input.Value()) == "" {
 			return m, tea.Quit
 		}
-		if !m.busy && msg.String() == "ctrl+enter" && strings.TrimSpace(m.input.Value()) != "" {
+		if !m.busy && isSubmitKey(msg.String()) && strings.TrimSpace(m.input.Value()) != "" {
 			return m.submit()
 		}
 		if msg.String() == "pgup" || msg.String() == "pgdown" || msg.String() == "ctrl+up" || msg.String() == "ctrl+down" {
@@ -203,7 +203,7 @@ func (m model) View() string {
 		return "Loading Symphony..."
 	}
 	header := titleStyle.Render("SYMPHONY") + "  " + subtleStyle.Render(fmt.Sprintf("%s / %s", m.config.Provider, m.config.Model)) + "\n" + subtleStyle.Render(m.config.Workspace+"  |  session "+m.config.SessionID)
-	status := "Ready. Ctrl+Enter sends, PgUp/PgDn scrolls, Ctrl+Q quits."
+	status := "Ready. Ctrl+S sends, PgUp/PgDn scrolls, Ctrl+Q quits."
 	if m.busy {
 		status = "Working..."
 	}
@@ -214,6 +214,12 @@ func (m model) View() string {
 		status = approvalStyle.Render(fmt.Sprintf("Approval required: %s\nHash: %s\n[y] approve  [n/Esc] deny", m.pending.Summary, m.pending.Hash))
 	}
 	return header + "\n\n" + m.viewport.View() + "\n\n" + status + "\n" + inputStyle.Render(m.input.View())
+}
+
+// Ctrl+Enter is reported as Ctrl+J by some terminals and as Enter by others.
+// Ctrl+S is the portable send binding for multiline input.
+func isSubmitKey(key string) bool {
+	return key == "ctrl+s" || key == "ctrl+j" || key == "ctrl+enter"
 }
 
 var (

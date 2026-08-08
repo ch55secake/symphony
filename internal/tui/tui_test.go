@@ -58,6 +58,17 @@ func TestSubmitRetainsConversationAndRendersResponses(t *testing.T) {
 	}
 }
 
+func TestSubmitKeysSupportTerminalVariants(t *testing.T) {
+	for _, key := range []string{"ctrl+s", "ctrl+j", "ctrl+enter"} {
+		if !isSubmitKey(key) {
+			t.Fatalf("isSubmitKey(%q) = false", key)
+		}
+	}
+	if isSubmitKey("enter") {
+		t.Fatal("plain Enter must preserve multiline input")
+	}
+}
+
 func TestApprovalViewDoesNotRenderToolResultContent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

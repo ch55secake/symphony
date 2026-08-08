@@ -219,15 +219,15 @@ func TestParseConfigValidatesRunArguments(t *testing.T) {
 		{"run", "--provider", "openai", "--model", "test"},
 	}
 	for _, args := range tests {
-		if _, err := parseConfig(args); err == nil {
+		if _, err := parseConfigWithSettings(args, appconfig.Settings{}); err == nil {
 			t.Fatalf("parseConfig(%q) error = nil", args)
 		}
 	}
-	config, err := parseConfig([]string{"run", "--provider", "anthropic", "--model", "test", "--workspace", root, "hello"})
+	config, err := parseConfigWithSettings([]string{"run", "--provider", "anthropic", "--model", "test", "--workspace", root, "hello"}, appconfig.Settings{})
 	if err != nil || config.workspace != root || config.prompt != "hello" {
 		t.Fatalf("parseConfig() = %#v, %v", config, err)
 	}
-	config, err = parseConfig([]string{"run", "--provider", "opencode", "--transport", "chat-completions", "--model", "kimi-test", "--workspace", root, "hello"})
+	config, err = parseConfigWithSettings([]string{"run", "--provider", "opencode", "--transport", "chat-completions", "--model", "kimi-test", "--workspace", root, "hello"}, appconfig.Settings{})
 	if err != nil || config.transport != "chat-completions" {
 		t.Fatalf("parseConfig() = %#v, %v", config, err)
 	}
