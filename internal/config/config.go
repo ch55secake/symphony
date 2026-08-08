@@ -21,6 +21,7 @@ type Settings struct {
 	OpenAIAPIKey    string
 	AnthropicAPIKey string
 	OpenCodeAPIKey  string
+	Theme           string
 }
 
 // Load reads the user configuration file and applies environment overrides.
@@ -71,7 +72,47 @@ func LoadFile(path string) (Settings, error) {
 		OpenAIAPIKey:    v.GetString("openai_api_key"),
 		AnthropicAPIKey: v.GetString("anthropic_api_key"),
 		OpenCodeAPIKey:  v.GetString("opencode_api_key"),
+		Theme:           v.GetString("theme"),
 	}, nil
+}
+
+// SaveTheme persists the selected built-in terminal theme.
+func SaveTheme(theme string) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	return saveTheme(path, theme)
+}
+
+func saveTheme(path, theme string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create config file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close config file: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("restrict config permissions: %w", err)
+	}
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.Is(err, os.ErrNotExist) && !errors.As(err, &notFound) {
+			return fmt.Errorf("read configuration: %w", err)
+		}
+	}
+	v.Set("theme", theme)
+	if err := v.WriteConfigAs(path); err != nil {
+		return fmt.Errorf("write configuration: %w", err)
+	}
+	return nil
 }
 
 // SaveConnection persists a provider, its API key, and the selected model.

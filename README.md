@@ -200,6 +200,15 @@ centered splash accepts `/connect`, which collects a provider API key, fetches a
 models, and saves the selected provider, key, and model in the user configuration file.
 The TUI always uses the current directory as the workspace.
 
+While chat is open, these commands manage the active session:
+
+- `/connect` changes provider, API key, and model using the masked connection picker.
+- `/model` lists models for the active provider; `/model NAME` selects one directly.
+- `/theme` lists built-in themes; `/theme default`, `/theme contrast`, and `/theme mono` apply and persist a theme.
+- `/allow-all` enables automatic approval for workspace writes and commands for the current session after confirmation. `/allow-all off` restores prompts. Every action remains recorded and constrained to the workspace.
+- `/settings` displays the current connection, theme, and approval mode.
+- `/help` lists available commands.
+
 Choose `opencode-go` for an OpenCode Go subscription. It uses the Go model catalog and
 endpoint, which are separate from pay-as-you-go OpenCode Zen billing.
 
@@ -208,3 +217,12 @@ context in memory for the current session. Write and command requests remain pau
 until explicitly approved with `y` or denied with `n` or `Esc`; the interface shows
 only the existing safe summary and hash. Use `Ctrl+Q` to finish the session or
 `Ctrl+C` to cancel it.
+
+## OpenTUI Migration
+
+The OpenTUI React client lives in `ui/`. It is compiled with Bun and communicates with
+the Go runtime over private file descriptors using a versioned JSON-lines protocol; it
+does not receive provider credentials, KurrentDB access, workspace capabilities, or
+event-store access. During migration, set `SYMPHONY_UI_EXECUTABLE=ui/dist/symphony-ui`
+to use the OpenTUI path with an existing saved connection. Go remains responsible for
+KurrentDB startup, session events, model calls, and approval resolution.
