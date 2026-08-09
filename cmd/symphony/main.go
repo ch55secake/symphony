@@ -483,7 +483,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 					}
 					continue
 				case "/settings":
-					if err := sendState(ui.State{Phase: "settings", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "[/model] model  [/theme] theme  [/allow-all] approval"}); err != nil {
+					if err := sendState(ui.State{Phase: "settings", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Choose a setting", AllowAll: allowAll}); err != nil {
 						return err
 					}
 					continue

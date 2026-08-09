@@ -31,6 +31,7 @@ type State struct {
 	Approval   *Approval         `json:"approval,omitempty"`
 	Selection  string            `json:"selection,omitempty"`
 	Options    []string          `json:"options,omitempty"`
+	AllowAll   bool              `json:"allow_all,omitempty"`
 }
 
 // Approval contains only the operator-safe details needed by the UI.

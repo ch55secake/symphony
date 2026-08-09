@@ -36,3 +36,21 @@ func TestSendStateIncludesStructuredApproval(t *testing.T) {
 		t.Fatalf("approval = %#v, want %#v", state.Approval, want)
 	}
 }
+
+func TestSendStateIncludesApprovalMode(t *testing.T) {
+	var buffer bytes.Buffer
+	if err := SendState(&buffer, State{Phase: "settings", AllowAll: true}); err != nil {
+		t.Fatalf("SendState() error = %v", err)
+	}
+	message, err := Read(bufio.NewReader(&buffer))
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	var state State
+	if err := json.Unmarshal(message.Payload, &state); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if !state.AllowAll {
+		t.Fatal("allow_all = false, want true")
+	}
+}

@@ -303,6 +303,48 @@ done
 	}
 }
 
+func TestOpenTUISettingsIncludesCurrentApprovalMode(t *testing.T) {
+	root := t.TempDir()
+	factory, store := testRuntime(t, root, &fakeProvider{}, func(_ *workspace.Service) ([]agent.Tool, error) { return nil, nil })
+	executable := writeUIFixture(t, `#!/bin/sh
+printf '%s\n' '{"version":1,"type":"app.ready"}' >&4
+printf '%s\n' '{"version":1,"type":"chat.start"}' >&4
+printf '%s\n' '{"version":1,"type":"prompt.submit","payload":{"prompt":"/allow-all"}}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"phase":"confirm"'*) break ;; esac
+done
+printf '%s\n' '{"version":1,"type":"allow-all.confirm","payload":{"approved":true}}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"status":"Approval mode: allow all (session only)"'*) break ;; esac
+done
+printf '%s\n' '{"version":1,"type":"prompt.submit","payload":{"prompt":"/settings"}}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in
+    *'"phase":"settings"'*)
+      case "$state" in *'"allow_all":true'*) break ;; *) exit 25 ;; esac
+      ;;
+  esac
+done
+printf '%s\n' '{"version":1,"type":"app.quit"}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"type":"app.shutdown"'*) exit 0 ;; esac
+done
+`)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PROVIDER", "openai")
+	t.Setenv("MODEL", "test-model")
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runOpenTUI(ctx, factory, func(context.Context) error { return nil }, executable); err != nil {
+		t.Fatalf("runOpenTUI() error = %v", err)
+	}
+	if !hasEvent(store.events, events.ApprovalModeChanged) {
+		t.Fatalf("events = %#v, want approval mode change", store.events)
+	}
+}
+
 func TestRunCompletesReadOnlySession(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("private content"), 0o600); err != nil {
