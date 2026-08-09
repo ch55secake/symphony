@@ -50,8 +50,10 @@ func (s *Service) Read(ctx context.Context, handle *session.Handle, actor, path 
 	started := time.Now()
 	data, err := s.read(path)
 	duration := time.Since(started).Milliseconds()
+	outcomeCtx, cancelOutcome := session.OutcomeContext(ctx)
+	defer cancelOutcome()
 	if err != nil {
-		outcomeErr := s.sessions.Record(ctx, handle, events.FileReadFailed, actor, events.FileReadFailedPayload{
+		outcomeErr := s.sessions.Record(outcomeCtx, handle, events.FileReadFailed, actor, events.FileReadFailedPayload{
 			Path:       path,
 			Code:       errorCode(err),
 			DurationMS: duration,
@@ -62,7 +64,7 @@ func (s *Service) Read(ctx context.Context, handle *session.Handle, actor, path 
 		return nil, fmt.Errorf("read workspace file: %w", err)
 	}
 
-	if err := s.sessions.Record(ctx, handle, events.FileReadCompleted, actor, events.FileReadCompletedPayload{
+	if err := s.sessions.Record(outcomeCtx, handle, events.FileReadCompleted, actor, events.FileReadCompletedPayload{
 		Path:        path,
 		Bytes:       len(data),
 		ContentHash: events.Hash(data),

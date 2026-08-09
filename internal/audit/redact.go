@@ -21,11 +21,12 @@ type Policy struct {
 func DefaultPolicy() Policy {
 	return Policy{
 		KeyPatterns: []*regexp.Regexp{
-			regexp.MustCompile(`(?i)(?:^|[_-])(api[_-]?key|authorization|password|secret|token|credential)(?:$|[_-])`),
+			regexp.MustCompile(`(?i)(?:^|[_-])(api[_-]?key|access[_-]?key|authorization|auth|password|secret|token|credential)(?:$|[_-])`),
 		},
 		ValuePatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)bearer\s+[a-z0-9._-]+`),
-			regexp.MustCompile(`(?i)(?:^|--?)(?:api[_-]?key|authorization|password|secret|token|credential)=\S+`),
+			regexp.MustCompile(`(?i)(?:^|--?)(?:api[_-]?key|access[_-]?key|authorization|auth|password|secret|token|credential)=\S+`),
+			regexp.MustCompile(`(?i)(?:^|\s)[a-z0-9_]*(?:api[_-]?key|access[_-]?key|authorization|auth|password|secret|token|credential)[a-z0-9_]*=\S+`),
 		},
 	}
 }
@@ -86,8 +87,10 @@ func (p Policy) redact(value *any, path string, redactions *[]events.Redaction) 
 	}
 }
 
+var sensitiveOptionPattern = regexp.MustCompile(`(?i)^--?(?:api[_-]?key|access[_-]?key|authorization|auth|password|secret|token|credential)(?:=\S+)?$`)
+
 func isSensitiveOption(value string) bool {
-	return regexp.MustCompile(`(?i)^--?(?:api[_-]?key|authorization|password|secret|token|credential)(?:=\S+)?$`).MatchString(strings.TrimSpace(value))
+	return sensitiveOptionPattern.MatchString(strings.TrimSpace(value))
 }
 
 func (p Policy) matchesKey(key string) bool {

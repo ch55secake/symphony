@@ -103,13 +103,15 @@ func (s *Service) ExecuteWrite(ctx context.Context, handle *session.Handle, acto
 	request.executed = true
 
 	started := time.Now()
+	outcomeCtx, cancelOutcome := session.OutcomeContext(ctx)
+	defer cancelOutcome()
 	if len(content) != request.Bytes || events.Hash(content) != request.ContentHash {
-		return s.recordWriteFailure(ctx, handle, actor, request, "content_changed", started, ErrContentChanged)
+		return s.recordWriteFailure(outcomeCtx, handle, actor, request, "content_changed", started, ErrContentChanged)
 	}
 	if err := s.write(request.Path, content); err != nil {
-		return s.recordWriteFailure(ctx, handle, actor, request, writeErrorCode(err), started, err)
+		return s.recordWriteFailure(outcomeCtx, handle, actor, request, writeErrorCode(err), started, err)
 	}
-	if err := s.sessions.Record(ctx, handle, events.FileWriteCompleted, actor, events.FileWriteCompletedPayload{
+	if err := s.sessions.Record(outcomeCtx, handle, events.FileWriteCompleted, actor, events.FileWriteCompletedPayload{
 		OperationID: request.OperationID.String(),
 		Path:        request.Path,
 		Bytes:       request.Bytes,

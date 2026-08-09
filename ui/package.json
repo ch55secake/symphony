@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run src/index.tsx",
-    "build": "mkdir -p ../internal/ui/assets && bun build --compile ${BUN_TARGET:+--target=$BUN_TARGET} --outfile=../internal/ui/assets/symphony-ui src/index.tsx",
+    "dev": "bun run src/main.tsx",
+    "build": "mkdir -p ../internal/ui/assets && bun build --compile ${BUN_TARGET:+--target=$BUN_TARGET} --outfile=../internal/ui/assets/symphony-ui src/main.tsx",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -14,7 +15,7 @@
   },
   "devDependencies": {
     "@types/react": "latest",
-	"@types/bun": "latest",
+    "@types/bun": "latest",
     "typescript": "latest"
   }
 }

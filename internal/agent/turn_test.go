@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ch55secake/symphony/internal/audit"
@@ -61,8 +62,8 @@ func TestRunPersistsOrderedRedactedTurn(t *testing.T) {
 		StopReason: "tool_use",
 		ToolCalls: []events.ModelToolCall{{
 			ID:        "call-1",
-			Name:      "read_file",
-			Arguments: json.RawMessage(`{"token":"tool-secret","path":"note.txt"}`),
+			Name:      "write_file",
+			Arguments: json.RawMessage(`{"path":"note.txt","content":"ordinary-write-content"}`),
 		}},
 		InputTokens:  10,
 		OutputTokens: 20,
@@ -70,7 +71,7 @@ func TestRunPersistsOrderedRedactedTurn(t *testing.T) {
 	request := CompletionRequest{
 		Model:    "test-model",
 		Messages: []Message{{Role: RoleUser, Content: "Bearer user-secret"}},
-		Tools:    []ToolDefinition{{Name: "read_file", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		Tools:    []ToolDefinition{{Name: "write_file", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 	}
 	completion, err := service.Run(context.Background(), handle, "user", provider, request)
 	if err != nil {
@@ -79,7 +80,7 @@ func TestRunPersistsOrderedRedactedTurn(t *testing.T) {
 	if completion.StopReason != "tool_use" || provider.calls != 1 {
 		t.Fatalf("completion = %#v, provider calls = %d", completion, provider.calls)
 	}
-	if len(store.events) != 4 || store.events[1].Type != events.UserMessage || store.events[2].Type != events.ModelRequested || store.events[3].Type != events.ModelCompleted {
+	if len(store.events) != 4 || store.events[1].Type != events.UserMessage || store.events[2].Type != events.ModelRequested || store.events[3].Type != events.ModelCompletedV2 {
 		t.Fatalf("events = %#v, want ordered model turn", store.events)
 	}
 	if store.events[2].CausationID == nil || *store.events[2].CausationID != store.events[1].ID {
@@ -88,12 +89,12 @@ func TestRunPersistsOrderedRedactedTurn(t *testing.T) {
 	if store.events[3].CausationID == nil || *store.events[3].CausationID != store.events[2].ID {
 		t.Fatal("model completion does not cite model request as its cause")
 	}
-	var payload events.ModelCompletedPayload
+	var payload events.ModelCompletedV2Payload
 	if err := json.Unmarshal(store.events[3].Payload, &payload); err != nil {
 		t.Fatalf("unmarshal completion payload: %v", err)
 	}
-	if payload.Content != audit.RedactedValue || string(payload.ToolCalls[0].Arguments) != `{"path":"note.txt","token":"[REDACTED]"}` {
-		t.Fatalf("persisted completion = %#v, want redacted content and arguments", payload)
+	if payload.Content != audit.RedactedValue || payload.ToolCalls[0].Name != "write_file" || payload.ToolCalls[0].ArgumentsHash != events.Hash([]byte(`{"path":"note.txt","content":"ordinary-write-content"}`)) || strings.Contains(string(store.events[3].Payload), "ordinary-write-content") {
+		t.Fatalf("persisted completion = %#v, want safe tool-call summary", payload)
 	}
 }
 

@@ -81,6 +81,36 @@ func TestDefaultPolicyRedactsSecretCommandArguments(t *testing.T) {
 	}
 }
 
+func TestDefaultPolicyRedactsSecretEnvironmentAssignments(t *testing.T) {
+	t.Parallel()
+	payload, redactions, err := DefaultPolicy().Redact([]string{"OPENAI_API_KEY=top-secret", "AWS_SECRET_ACCESS_KEY=aws-secret", "AWS_ACCESS_KEY_ID=key-id", "GOOGLE_APPLICATION_CREDENTIALS=file", "safe=value"})
+	if err != nil {
+		t.Fatalf("Redact() error = %v", err)
+	}
+	var decoded []string
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(redactions) != 4 || decoded[0] != RedactedValue || decoded[1] != RedactedValue || decoded[2] != RedactedValue || decoded[3] != RedactedValue || decoded[4] != "safe=value" {
+		t.Fatalf("decoded = %#v, redactions = %#v", decoded, redactions)
+	}
+}
+
+func TestDefaultPolicyRedactsAuthAndAccessKeyOptions(t *testing.T) {
+	t.Parallel()
+	payload, redactions, err := DefaultPolicy().Redact([]string{"--auth=auth-secret", "--auth", "space-secret", "--access-key=access-secret", "safe"})
+	if err != nil {
+		t.Fatalf("Redact() error = %v", err)
+	}
+	var decoded []string
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(redactions) != 4 || decoded[0] != RedactedValue || decoded[1] != RedactedValue || decoded[2] != RedactedValue || decoded[3] != RedactedValue || decoded[4] != "safe" {
+		t.Fatalf("decoded = %#v, redactions = %#v", decoded, redactions)
+	}
+}
+
 func TestDefaultPolicyPreservesTokenUsageMetadata(t *testing.T) {
 	t.Parallel()
 	payload, redactions, err := DefaultPolicy().Redact(map[string]any{"input_tokens": 42})

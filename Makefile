@@ -10,7 +10,7 @@ help: ## Show available commands.
 		'  build            Build the Symphony CLI and OpenTUI child.' \
 		'  build-cli        Build the Symphony CLI with an existing OpenTUI child.' \
 		'  ui-install       Install pinned OpenTUI dependencies.' \
-		'  ui-test          Typecheck the OpenTUI application.' \
+		'  ui-test          Test and typecheck the OpenTUI application.' \
 		'  ui-build         Compile the standalone OpenTUI application.' \
 		'  test             Run Go tests.' \
 		'  vet              Run Go vet.' \
@@ -24,7 +24,8 @@ help: ## Show available commands.
 ui-install: ## Install pinned OpenTUI dependencies.
 	bun install --cwd ui --frozen-lockfile
 
-ui-test: ui-install ## Typecheck the OpenTUI application.
+ui-test: ui-install ## Test and typecheck the OpenTUI application.
+	bun run --cwd ui test
 	bun run --cwd ui typecheck
 
 ui-build: ui-install ## Compile the standalone OpenTUI application.

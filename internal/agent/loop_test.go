@@ -67,22 +67,27 @@ func TestLoopReadsFileAndContinuesTurn(t *testing.T) {
 		{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "read_file", Arguments: json.RawMessage(`{"path":"note.txt"}`)}}, StopReason: "tool_use"},
 		{Content: "The file was read.", StopReason: "stop"},
 	}}
-	completion, err := loop.Run(context.Background(), handle, "user", provider, CompletionRequest{
+	var activities []ToolActivity
+	result, err := loop.RunWithApprovalObserved(context.Background(), handle, "user", provider, CompletionRequest{
 		Model:    "test-model",
 		Messages: []Message{{Role: RoleUser, Content: "Read note.txt"}},
 		Tools:    []ToolDefinition{readTool.Definition()},
-	})
+	}, func(activity ToolActivity) { activities = append(activities, activity) })
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("RunWithApprovalObserved() error = %v", err)
 	}
+	completion := *result.Completion
 	if completion.Content != "The file was read." || len(provider.calls) != 2 {
 		t.Fatalf("completion = %#v, provider calls = %d", completion, len(provider.calls))
+	}
+	if len(activities) != 3 || activities[0].Phase != ActivityRequested || activities[1].Phase != ActivityRunning || activities[2].Phase != ActivityCompleted || activities[2].Target != "note.txt" || activities[2].Bytes != len(content) {
+		t.Fatalf("activities = %#v, want requested/running/completed read lifecycle", activities)
 	}
 	followUp := provider.calls[1]
 	if len(followUp.Messages) != 3 || len(followUp.Messages[1].ToolCalls) != 1 || len(followUp.Messages[2].ToolResults) != 1 || followUp.Messages[2].ToolResults[0].Content != content {
 		t.Fatalf("follow-up messages = %#v, want assistant tool call and user result", followUp.Messages)
 	}
-	if len(store.events) != 9 || store.events[6].Type != events.ToolResult || store.events[7].Type != events.ModelRequested || store.events[8].Type != events.ModelCompleted {
+	if len(store.events) != 9 || store.events[6].Type != events.ToolResultV2 || store.events[7].Type != events.ModelRequested || store.events[8].Type != events.ModelCompletedV2 {
 		t.Fatalf("events = %#v, want audited tool loop", store.events)
 	}
 	encoded, err := json.Marshal(store.events)
@@ -157,7 +162,7 @@ func TestLoopRecordsUnknownToolAndStops(t *testing.T) {
 	if !errors.Is(err, ErrUnknownTool) {
 		t.Fatalf("Run() error = %v, want ErrUnknownTool", err)
 	}
-	if len(store.events) != 5 || store.events[4].Type != events.ToolResult {
+	if len(store.events) != 5 || store.events[4].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want persisted unknown tool result", store.events)
 	}
 }
@@ -280,8 +285,15 @@ func TestWriteFileToolPausesThenApprovesAndResumes(t *testing.T) {
 	if content, err := os.ReadFile(filepath.Join(root, "note.txt")); err != nil || string(content) != "new content" {
 		t.Fatalf("written file = %q, %v", content, err)
 	}
-	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.FileWriteApproved || store.events[8].Type != events.FileWriteCompleted || store.events[9].Type != events.ToolResult {
+	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.FileWriteApproved || store.events[8].Type != events.FileWriteCompleted || store.events[9].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want approved write lifecycle", store.events)
+	}
+	var completion events.ModelCompletedV2Payload
+	if err := json.Unmarshal(store.events[3].Payload, &completion); err != nil {
+		t.Fatalf("model completion payload = %v", err)
+	}
+	if strings.Contains(string(store.events[3].Payload), "new content") || len(completion.ToolCalls) != 1 || completion.ToolCalls[0].ArgumentsHash == "" {
+		t.Fatalf("model completion = %#v, want hashed tool-call arguments without content", completion)
 	}
 }
 
@@ -328,7 +340,7 @@ func TestWriteFileToolDenialResumesWithErrorResult(t *testing.T) {
 	if len(provider.calls) != 2 || len(provider.calls[1].Messages[2].ToolResults) != 1 || !provider.calls[1].Messages[2].ToolResults[0].IsError {
 		t.Fatalf("follow-up = %#v, want error tool result", provider.calls)
 	}
-	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResult {
+	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want denied approval lifecycle", store.events)
 	}
 }
@@ -380,8 +392,88 @@ func TestRunCommandToolPausesThenApprovesAndResumes(t *testing.T) {
 	if len(provider.calls) != 2 || provider.calls[1].Messages[2].ToolResults[0].CallID != "call-1" || provider.calls[1].Messages[2].ToolResults[0].Name != "run_command" || provider.calls[1].Messages[2].ToolResults[0].Content != "command-output" {
 		t.Fatalf("follow-up = %#v, want command output tool result", provider.calls)
 	}
-	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.CommandApproved || store.events[8].Type != events.CommandCompleted || store.events[9].Type != events.ToolResult {
+	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.CommandApproved || store.events[8].Type != events.CommandCompleted || store.events[9].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want approved command lifecycle", store.events)
+	}
+	var toolResult events.ToolResultV2Payload
+	if err := json.Unmarshal(store.events[9].Payload, &toolResult); err != nil {
+		t.Fatalf("tool result payload = %v", err)
+	}
+	if toolResult.ExitCode == nil || *toolResult.ExitCode != 0 {
+		t.Fatalf("tool result exit code = %#v, want zero", toolResult.ExitCode)
+	}
+}
+
+func TestRunCommandFailureReturnsCompleteToolHistory(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store := &recordingStore{}
+	sessions := session.New(store, audit.DefaultPolicy())
+	handle, err := sessions.Start(context.Background(), "user", root)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	turns, _ := New(sessions)
+	workspaceService, _ := workspace.New(sessions, root)
+	commandTool, _ := NewRunCommandTool(workspaceService)
+	loop, _ := NewLoop(turns, []Tool{commandTool}, 2)
+	provider := &sequentialProvider{completions: []Completion{{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "run_command", Arguments: json.RawMessage(`{"executable":"sh","arguments":["-c","printf failed-output; exit 7"]}`)}}}}}
+	paused, err := loop.RunWithApproval(context.Background(), handle, "user", provider, CompletionRequest{Model: "test-model", Messages: []Message{{Role: RoleUser, Content: "run command"}}})
+	if err != nil || paused.Pending == nil {
+		t.Fatalf("RunWithApproval() result = %#v, error = %v", paused, err)
+	}
+	var activities []ToolActivity
+	failed, err := loop.ApproveObserved(context.Background(), handle, "user", provider, paused.Pending, func(activity ToolActivity) { activities = append(activities, activity) })
+	if err == nil {
+		t.Fatal("ApproveObserved() error = nil, want command failure")
+	}
+	if len(failed.Messages) == 0 || len(failed.Messages[len(failed.Messages)-1].ToolResults) != 1 {
+		t.Fatalf("messages = %#v, want failed tool result", failed.Messages)
+	}
+	result := failed.Messages[len(failed.Messages)-1].ToolResults[0]
+	if result.CallID != "call-1" || result.Name != "run_command" || !result.IsError || result.ExitCode == nil || *result.ExitCode != 7 {
+		t.Fatalf("tool result = %#v", result)
+	}
+	if len(activities) != 2 || activities[0].Phase != ActivityRunning || activities[1].Phase != ActivityFailed {
+		t.Fatalf("activities = %#v", activities)
+	}
+	if !hasEventType(store.events, events.CommandFailed) || !hasEventType(store.events, events.ToolResultV2) {
+		t.Fatalf("events = %#v, want command and tool failures", store.events)
+	}
+	for _, event := range store.events {
+		if event.Type != events.ToolResultV2 {
+			continue
+		}
+		var payload events.ToolResultV2Payload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("tool result payload = %v", err)
+		}
+		if payload.ExitCode == nil || *payload.ExitCode != 7 || !payload.IsError {
+			t.Fatalf("tool result payload = %#v, want failed exit code 7", payload)
+		}
+		return
+	}
+	t.Fatal("tool.result.v2 event not found")
+}
+
+func TestResumeFailureRetainsToolResultHistory(t *testing.T) {
+	t.Parallel()
+	store := &recordingStore{}
+	sessions := session.New(store, audit.DefaultPolicy())
+	handle, err := sessions.Start(context.Background(), "user", t.TempDir())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	turns, _ := New(sessions)
+	loop, _ := NewLoop(turns, nil, 2)
+	pending := &PendingApproval{round: 1, continuation: CompletionRequest{Model: "test-model", Messages: []Message{{Role: RoleAssistant, ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "run_command", Arguments: json.RawMessage(`{}`)}}}}}}
+	result := ToolResult{CallID: "call-1", Name: "run_command", Content: "completed", Bytes: len("completed"), Hash: events.Hash([]byte("completed"))}
+	resumed, err := loop.resume(context.Background(), handle, "user", &sequentialProvider{}, pending, result, nil)
+	if err == nil {
+		t.Fatal("resume() error = nil, want provider failure")
+	}
+	if len(resumed.Messages) != 2 || len(resumed.Messages[1].ToolResults) != 1 || resumed.Messages[1].ToolResults[0].CallID != "call-1" {
+		t.Fatalf("messages = %#v, want retained tool result", resumed.Messages)
 	}
 }
 
@@ -413,7 +505,7 @@ func TestRunCommandToolDenialResumesWithoutExecution(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "marker")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("command executed after denial: %v", err)
 	}
-	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResult {
+	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want denied command lifecycle", store.events)
 	}
 }
@@ -490,4 +582,13 @@ func TestPendingApprovalRejectsCrossSessionAndReuse(t *testing.T) {
 	if _, err := loop.Approve(context.Background(), handle, "user", provider, result.Pending); !errors.Is(err, ErrApprovalUsed) {
 		t.Fatalf("Approve() error = %v, want ErrApprovalUsed", err)
 	}
+}
+
+func hasEventType(recorded []events.Event, eventType events.Type) bool {
+	for _, event := range recorded {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
 }

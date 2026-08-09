@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ch55secake/symphony/internal/agent"
 	"github.com/ch55secake/symphony/internal/audit"
@@ -36,6 +37,8 @@ const actor = "cli"
 
 const localKurrentDBURL = "kurrentdb://localhost:2113?tls=false"
 
+const uiOperationShutdownTimeout = 5 * time.Second
+
 type config struct {
 	provider         string
 	transport        string
@@ -44,6 +47,12 @@ type config struct {
 	prompt           string
 	connectionString string
 	apiKey           string
+}
+
+type uiToolActivity struct {
+	Activity      agent.ToolActivity
+	AfterMessages int
+	SourceID      string
 }
 
 type runtime struct {
@@ -199,7 +208,13 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 	if err != nil {
 		return err
 	}
-	defer func() { _ = child.Close() }()
+	var appRuntime *runtime
+	defer func() {
+		_ = child.Close()
+		if appRuntime != nil {
+			_ = appRuntime.close()
+		}
+	}()
 	if err := ui.SendState(child.Writer, ui.State{Phase: "starting", Status: "Starting local KurrentDB..."}); err != nil {
 		return err
 	}
@@ -227,161 +242,347 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 	if err != nil {
 		return err
 	}
-	defer func() { _ = runtime.close() }()
+	appRuntime = runtime
 	handle, err := runtime.sessions.Start(ctx, actor, config.workspace)
 	if err != nil {
 		return err
 	}
 	messages := []agent.Message{}
+	activities := []uiToolActivity{}
 	var pending *agent.PendingApproval
 	allowAll := false
-	if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Workspace: config.workspace, Status: "Enter starts chat"}); err != nil {
+	if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat"}); err != nil {
 		return err
 	}
-	for {
-		message, err := ui.Read(child.Reader)
-		if err != nil {
-			_ = runtime.sessions.Fail(context.WithoutCancel(ctx), handle, actor, "ui_disconnected")
-			return err
+	stateUpdates := make(chan ui.State, 1)
+	stateWriteErrors := make(chan error, 1)
+	stateWriterCtx, stopStateWriter := context.WithCancel(ctx)
+	defer stopStateWriter()
+	go func() {
+		for {
+			select {
+			case state := <-stateUpdates:
+				if err := ui.SendState(child.Writer, state); err != nil {
+					stateWriteErrors <- err
+					return
+				}
+			case <-stateWriterCtx.Done():
+				return
+			}
 		}
-		switch message.Type {
-		case "app.ready":
-			if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Workspace: config.workspace, Status: "Enter starts chat"}); err != nil {
-				return err
+	}()
+	sendState := func(state ui.State) error {
+		select {
+		case err := <-stateWriteErrors:
+			return err
+		default:
+		}
+		select {
+		case stateUpdates <- state:
+		default:
+			select {
+			case <-stateUpdates:
+			default:
 			}
-			continue
-		case "chat.start":
-			if err := sendUIState(child.Writer, config, messages, pending, "READY"); err != nil {
-				return err
+			select {
+			case stateUpdates <- state:
+			default:
 			}
-			continue
-		case "app.quit":
-			return runtime.sessions.Finish(ctx, handle, actor, "quit")
-		case "prompt.submit":
-			var request struct {
-				Prompt string `json:"prompt"`
+		}
+		return nil
+	}
+	type readResult struct {
+		message ui.Message
+		err     error
+	}
+	type operationResult struct {
+		result agent.LoopResult
+		err    error
+	}
+	activityUpdates := make(chan uiToolActivity, 256)
+	reads := make(chan readResult, 1)
+	readCtx, stopReading := context.WithCancel(ctx)
+	defer stopReading()
+	go func() {
+		for {
+			message, err := ui.Read(child.Reader)
+			select {
+			case reads <- readResult{message: message, err: err}:
+			case <-readCtx.Done():
+				return
 			}
-			if err := json.Unmarshal(message.Payload, &request); err != nil || strings.TrimSpace(request.Prompt) == "" || pending != nil {
+			if err != nil {
+				return
+			}
+		}
+	}()
+	var operation <-chan operationResult
+	var cancelOperation context.CancelFunc
+	startOperation := func(run func(context.Context) (agent.LoopResult, error)) {
+		operationCtx, cancel := context.WithCancel(ctx)
+		results := make(chan operationResult, 1)
+		operation = results
+		cancelOperation = cancel
+		go func() {
+			result, err := run(operationCtx)
+			results <- operationResult{result: result, err: err}
+		}()
+	}
+	cancelAndWait := func() bool {
+		if cancelOperation == nil {
+			return true
+		}
+		cancelOperation()
+		select {
+		case <-operation:
+			cancelOperation()
+			operation = nil
+			cancelOperation = nil
+			return true
+		case <-time.After(uiOperationShutdownTimeout):
+			return false
+		}
+	}
+
+	for {
+		select {
+		case err := <-stateWriteErrors:
+			if !cancelAndWait() {
+				appRuntime = nil
+			}
+			return err
+		case <-ctx.Done():
+			if !cancelAndWait() {
+				appRuntime = nil
+				return fmt.Errorf("timed out canceling UI operation: %w", ctx.Err())
+			}
+			outcomeCtx, cancelOutcome := session.OutcomeContext(ctx)
+			_ = runtime.sessions.Fail(outcomeCtx, handle, actor, "canceled")
+			cancelOutcome()
+			return ctx.Err()
+		case completed := <-operation:
+			for draining := true; draining; {
+				select {
+				case update := <-activityUpdates:
+					activities = upsertUIActivity(activities, update)
+				default:
+					draining = false
+				}
+			}
+			operation = nil
+			cancelOperation()
+			cancelOperation = nil
+			if completed.err != nil {
+				if len(completed.result.Messages) > 0 {
+					messages = completed.result.Messages
+					activities = alignUIActivities(messages, activities)
+				}
+				if pending != nil && pending.Used() {
+					pending = nil
+				}
+				status := displayUIError(completed.err)
+				if errors.Is(completed.err, context.Canceled) {
+					status = "Canceled"
+				}
+				if err := sendUIState(sendState, config, messages, activities, pending, status); err != nil {
+					return err
+				}
 				continue
 			}
-			command := strings.TrimSpace(request.Prompt)
-			switch command {
-			case "/model":
-				available, err := listUIModels(ctx, runtime, handle, config)
-				if err != nil {
-					_ = sendUIState(child.Writer, config, messages, pending, displayUIError(err))
+			messages, pending = completed.result.Messages, completed.result.Pending
+			activities = alignUIActivities(messages, activities)
+			if err := sendUIState(sendState, config, messages, activities, pending, "READY"); err != nil {
+				return err
+			}
+			continue
+		case update := <-activityUpdates:
+			activities = upsertUIActivity(activities, update)
+			if err := sendUIState(sendState, config, messages, activities, pending, "WORKING"); err != nil {
+				return err
+			}
+			continue
+		case incoming := <-reads:
+			if incoming.err != nil {
+				if !cancelAndWait() {
+					appRuntime = nil
+					return fmt.Errorf("timed out stopping disconnected UI operation: %w", incoming.err)
+				}
+				outcomeCtx, cancelOutcome := session.OutcomeContext(ctx)
+				_ = runtime.sessions.Fail(outcomeCtx, handle, actor, "ui_disconnected")
+				cancelOutcome()
+				return incoming.err
+			}
+			message := incoming.message
+			switch message.Type {
+			case "app.ready":
+				if err := sendState(ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat"}); err != nil {
+					return err
+				}
+				continue
+			case "chat.start":
+				if operation != nil {
 					continue
 				}
-				if err := ui.SendState(child.Writer, ui.State{Phase: "select", Selection: "model", Options: available, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a model"}); err != nil {
+				if err := sendUIState(sendState, config, messages, activities, pending, "READY"); err != nil {
 					return err
 				}
 				continue
-			case "/theme":
-				if err := ui.SendState(child.Writer, ui.State{Phase: "select", Selection: "theme", Options: []string{"default", "contrast", "mono"}, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a theme"}); err != nil {
-					return err
+			case "app.quit":
+				if cancelOperation != nil {
+					cancelOperation()
+					_ = child.Close()
+					if !cancelAndWait() {
+						appRuntime = nil
+						return errors.New("timed out waiting for the active operation to stop")
+					}
 				}
-				continue
-			case "/allow-all", "/allow-all on":
-				if err := ui.SendState(child.Writer, ui.State{Phase: "confirm", Selection: "allow-all", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Allow all workspace writes and commands for this session?"}); err != nil {
-					return err
+				finishCtx, cancelFinish := session.OutcomeContext(ctx)
+				defer cancelFinish()
+				return runtime.sessions.Finish(finishCtx, handle, actor, "quit")
+			case "app.cancel":
+				if cancelOperation == nil {
+					finishCtx, cancelFinish := session.OutcomeContext(ctx)
+					defer cancelFinish()
+					return runtime.sessions.Finish(finishCtx, handle, actor, "quit")
 				}
+				cancelOperation()
 				continue
-			case "/settings":
-				if err := ui.SendState(child.Writer, ui.State{Phase: "settings", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "[/model] model  [/theme] theme  [/allow-all] approval"}); err != nil {
-					return err
+			case "prompt.submit":
+				var request struct {
+					Prompt string `json:"prompt"`
 				}
-				continue
-			}
-			if strings.HasPrefix(command, "/") {
-				status, updatedAllowAll, handled := handleUICommand(ctx, runtime, handle, &config, request.Prompt, allowAll)
-				if handled {
-					allowAll = updatedAllowAll
-					if err := sendUIState(child.Writer, config, messages, pending, status); err != nil {
+				if err := json.Unmarshal(message.Payload, &request); err != nil || strings.TrimSpace(request.Prompt) == "" || pending != nil || operation != nil {
+					continue
+				}
+				command := strings.TrimSpace(request.Prompt)
+				switch command {
+				case "/model":
+					available, err := listUIModels(ctx, runtime, handle, config)
+					if err != nil {
+						_ = sendUIState(sendState, config, messages, activities, pending, displayUIError(err))
+						continue
+					}
+					if err := sendState(ui.State{Phase: "select", Selection: "model", Options: available, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a model"}); err != nil {
+						return err
+					}
+					continue
+				case "/theme":
+					if err := sendState(ui.State{Phase: "select", Selection: "theme", Options: []string{"default", "contrast", "mono"}, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a theme"}); err != nil {
+						return err
+					}
+					continue
+				case "/allow-all", "/allow-all on":
+					if err := sendState(ui.State{Phase: "confirm", Selection: "allow-all", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Allow all workspace writes and commands for this session?"}); err != nil {
+						return err
+					}
+					continue
+				case "/settings":
+					if err := sendState(ui.State{Phase: "settings", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "[/model] model  [/theme] theme  [/allow-all] approval"}); err != nil {
 						return err
 					}
 					continue
 				}
-			}
-			messages = append(messages, agent.Message{Role: agent.RoleUser, Content: request.Prompt})
-			if err := sendUIState(child.Writer, config, messages, nil, "WORKING"); err != nil {
-				return err
-			}
-			result, err := runtime.loop.RunWithApproval(ctx, handle, actor, runtime.provider, agent.CompletionRequest{Model: config.model, Messages: messages, Tools: runtime.tools})
-			if err != nil {
-				_ = sendUIState(child.Writer, config, messages, nil, displayUIError(err))
-				continue
-			}
-			messages, pending = result.Messages, result.Pending
-			for pending != nil && allowAll {
-				result, err = runtime.loop.Approve(ctx, handle, actor, runtime.provider, pending)
-				if err != nil {
-					_ = sendUIState(child.Writer, config, messages, nil, displayUIError(err))
-					pending = nil
-					break
+				if strings.HasPrefix(command, "/") {
+					status, updatedAllowAll, handled := handleUICommand(ctx, runtime, handle, &config, request.Prompt, allowAll)
+					if handled {
+						allowAll = updatedAllowAll
+						if err := sendUIState(sendState, config, messages, activities, pending, status); err != nil {
+							return err
+						}
+						continue
+					}
 				}
-				messages, pending = result.Messages, result.Pending
-			}
-		case "selection.submit":
-			var request struct {
-				Selection string `json:"selection"`
-				Value     string `json:"value"`
-			}
-			if err := json.Unmarshal(message.Payload, &request); err != nil || request.Value == "" {
+				messages = append(messages, agent.Message{Role: agent.RoleUser, Content: request.Prompt})
+				if err := sendUIState(sendState, config, messages, activities, nil, "WORKING"); err != nil {
+					return err
+				}
+				requestMessages := append([]agent.Message(nil), messages...)
+				afterMessages := len(messages)
+				startOperation(func(operationCtx context.Context) (agent.LoopResult, error) {
+					observer := func(activity agent.ToolActivity) {
+						select {
+						case activityUpdates <- uiToolActivity{Activity: activity, AfterMessages: afterMessages, SourceID: activity.ID}:
+						default:
+						}
+					}
+					result, err := runtime.loop.RunWithApprovalObserved(operationCtx, handle, actor, runtime.provider, agent.CompletionRequest{Model: config.model, Messages: requestMessages, Tools: runtime.tools}, observer)
+					for err == nil && result.Pending != nil && allowAll {
+						result, err = runtime.loop.ApproveObserved(operationCtx, handle, actor, runtime.provider, result.Pending, observer)
+					}
+					return result, err
+				})
 				continue
-			}
-			switch request.Selection {
-			case "model", "theme":
-			default:
-				continue
-			}
-			command := "/" + request.Selection + " " + request.Value
-			status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, command, allowAll)
-			allowAll = updatedAllowAll
-			if err := sendUIState(child.Writer, config, messages, pending, status); err != nil {
-				return err
-			}
-			continue
-		case "allow-all.confirm":
-			var request struct {
-				Approved bool `json:"approved"`
-			}
-			if err := json.Unmarshal(message.Payload, &request); err != nil || !request.Approved {
-				if err := sendUIState(child.Writer, config, messages, pending, "Allow all canceled"); err != nil {
+			case "selection.submit":
+				if operation != nil {
+					continue
+				}
+				var request struct {
+					Selection string `json:"selection"`
+					Value     string `json:"value"`
+				}
+				if err := json.Unmarshal(message.Payload, &request); err != nil || request.Value == "" {
+					continue
+				}
+				switch request.Selection {
+				case "model", "theme":
+				default:
+					continue
+				}
+				command := "/" + request.Selection + " " + request.Value
+				status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, command, allowAll)
+				allowAll = updatedAllowAll
+				if err := sendUIState(sendState, config, messages, activities, pending, status); err != nil {
 					return err
 				}
 				continue
-			}
-			status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, "/allow-all on", allowAll)
-			allowAll = updatedAllowAll
-			if err := sendUIState(child.Writer, config, messages, pending, status); err != nil {
-				return err
-			}
-			continue
-		case "approval.resolve":
-			var request struct {
-				Approved bool `json:"approved"`
-			}
-			if err := json.Unmarshal(message.Payload, &request); err != nil || pending == nil {
+			case "allow-all.confirm":
+				if operation != nil {
+					continue
+				}
+				var request struct {
+					Approved bool `json:"approved"`
+				}
+				if err := json.Unmarshal(message.Payload, &request); err != nil || !request.Approved {
+					if err := sendUIState(sendState, config, messages, activities, pending, "Allow all canceled"); err != nil {
+						return err
+					}
+					continue
+				}
+				status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, "/allow-all on", allowAll)
+				allowAll = updatedAllowAll
+				if err := sendUIState(sendState, config, messages, activities, pending, status); err != nil {
+					return err
+				}
+				continue
+			case "approval.resolve":
+				var request struct {
+					Approved bool `json:"approved"`
+				}
+				if err := json.Unmarshal(message.Payload, &request); err != nil || pending == nil || operation != nil {
+					continue
+				}
+				if err := sendUIState(sendState, config, messages, activities, nil, "WORKING"); err != nil {
+					return err
+				}
+				approval := pending
+				afterMessages := len(messages)
+				startOperation(func(operationCtx context.Context) (agent.LoopResult, error) {
+					observer := func(activity agent.ToolActivity) {
+						select {
+						case activityUpdates <- uiToolActivity{Activity: activity, AfterMessages: afterMessages, SourceID: activity.ID}:
+						default:
+						}
+					}
+					if request.Approved {
+						return runtime.loop.ApproveObserved(operationCtx, handle, actor, runtime.provider, approval, observer)
+					}
+					return runtime.loop.DenyObserved(operationCtx, handle, actor, runtime.provider, approval, "user_denied", observer)
+				})
 				continue
 			}
-			var result agent.LoopResult
-			if err := sendUIState(child.Writer, config, messages, nil, "WORKING"); err != nil {
+			if err := sendUIState(sendState, config, messages, activities, pending, "READY"); err != nil {
 				return err
 			}
-			if request.Approved {
-				result, err = runtime.loop.Approve(ctx, handle, actor, runtime.provider, pending)
-			} else {
-				result, err = runtime.loop.Deny(ctx, handle, actor, runtime.provider, pending, "user_denied")
-			}
-			if err != nil {
-				_ = sendUIState(child.Writer, config, messages, nil, displayUIError(err))
-				pending = nil
-				continue
-			}
-			messages, pending = result.Messages, result.Pending
-		}
-		if err := sendUIState(child.Writer, config, messages, pending, "READY"); err != nil {
-			return err
 		}
 	}
 }
@@ -495,9 +696,9 @@ func currentWorkspace() (string, error) {
 	return workspace, nil
 }
 
-func sendUIState(writer io.Writer, config config, messages []agent.Message, pending *agent.PendingApproval, status string) error {
-	transcript := make([]ui.TranscriptEntry, 0, len(messages)*2)
-	for _, message := range messages {
+func sendUIState(send func(ui.State) error, config config, messages []agent.Message, activities []uiToolActivity, pending *agent.PendingApproval, status string) error {
+	transcript := make([]ui.TranscriptEntry, 0, len(messages)+len(activities))
+	for index, message := range messages {
 		label, role := "You", "user"
 		if message.Role == agent.RoleAssistant {
 			label, role = config.model, "assistant"
@@ -505,15 +706,76 @@ func sendUIState(writer io.Writer, config config, messages []agent.Message, pend
 		if message.Content != "" {
 			transcript = append(transcript, ui.TranscriptEntry{Role: role, Label: label, Content: message.Content})
 		}
-		for _, call := range message.ToolCalls {
-			transcript = append(transcript, ui.TranscriptEntry{Role: "activity", Label: config.model, Activity: "Requested " + call.Name})
-		}
+		transcript = appendToolActivities(transcript, activities, index+1, config.model)
 	}
+	transcript = appendToolActivities(transcript, activities, len(messages)+1, config.model)
 	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Transcript: transcript}
 	if pending != nil {
-		state.Pending = "Approval required: " + pending.Summary + "\nHash: " + pending.Hash + "\n[y] approve  [n] deny"
+		state.Approval = &ui.Approval{Action: pending.Action, Summary: pending.Summary, Hash: pending.Hash}
 	}
-	return ui.SendState(writer, state)
+	return send(state)
+}
+
+func upsertUIActivity(activities []uiToolActivity, update uiToolActivity) []uiToolActivity {
+	if update.SourceID == "" {
+		update.SourceID = update.Activity.ID
+	}
+	for index := len(activities) - 1; index >= 0; index-- {
+		if activities[index].SourceID == update.SourceID && !terminalActivity(activities[index].Activity.Phase) {
+			update.Activity.ID = activities[index].Activity.ID
+			activities[index].Activity = update.Activity
+			return activities
+		}
+	}
+	update.Activity.ID = fmt.Sprintf("%s:%d", update.SourceID, len(activities))
+	return append(activities, update)
+}
+
+func terminalActivity(phase agent.ActivityPhase) bool {
+	return phase == agent.ActivityCompleted || phase == agent.ActivityFailed || phase == agent.ActivityDenied
+}
+
+func alignUIActivities(messages []agent.Message, activities []uiToolActivity) []uiToolActivity {
+	occurrences := make(map[string]int)
+	for messageIndex, message := range messages {
+		for _, call := range message.ToolCalls {
+			wanted := occurrences[call.ID]
+			current := 0
+			for activityIndex := range activities {
+				if activities[activityIndex].SourceID == call.ID {
+					if current == wanted {
+						activities[activityIndex].AfterMessages = messageIndex + 1
+						break
+					}
+					current++
+				}
+			}
+			occurrences[call.ID]++
+		}
+	}
+	return activities
+}
+
+func appendToolActivities(transcript []ui.TranscriptEntry, activities []uiToolActivity, afterMessages int, label string) []ui.TranscriptEntry {
+	for _, entry := range activities {
+		if entry.AfterMessages != afterMessages {
+			continue
+		}
+		activity := entry.Activity
+		transcript = append(transcript, ui.TranscriptEntry{Role: "activity", Label: label, Tool: &ui.ToolActivity{
+			ID:               activity.ID,
+			Name:             activity.Name,
+			Phase:            string(activity.Phase),
+			Target:           activity.Target,
+			Command:          activity.Command,
+			WorkingDirectory: activity.WorkingDirectory,
+			Bytes:            activity.Bytes,
+			Truncated:        activity.Truncated,
+			ExitCode:         activity.ExitCode,
+			OutputHidden:     activity.OutputHidden,
+		}})
+	}
+	return transcript
 }
 
 func displayUIError(err error) string { return "Error: " + err.Error() }

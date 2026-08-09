@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ch55secake/symphony/internal/audit"
 	"github.com/ch55secake/symphony/internal/events"
@@ -14,6 +15,13 @@ import (
 
 // ErrClosed reports an attempt to append a terminal event twice.
 var ErrClosed = errors.New("session is already closed")
+
+const outcomePersistenceTimeout = 2 * time.Second
+
+// OutcomeContext preserves an intent's outcome write after cancellation without waiting forever.
+func OutcomeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), outcomePersistenceTimeout)
+}
 
 // EventStore is the ordered append capability required by the session runtime.
 type EventStore interface {
