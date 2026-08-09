@@ -19,7 +19,6 @@ type Props = {
   onSubmit: () => void
   suggestions: Command[]
   selected: number
-  spinner: number
   theme: Theme
   width: number
   height: number
@@ -33,7 +32,7 @@ export function ChatScreen(props: Props) {
   const tiny = props.height < 15 || props.width < 60
   const busy = props.status === "WORKING" || props.status === "CANCELING"
   const visibleSuggestions = tiny ? [] : props.suggestions
-  return <box flexDirection="column" padding={compact ? 0 : 1} gap={1} style={{ width: props.width, height: props.height, backgroundColor: props.theme.background }}>
+  return <box flexDirection="column" padding={compact ? 0 : 1} gap={1} style={{ width: props.width, height: props.height }}>
     {!tiny && <Header provider={props.provider} model={props.model} workspace={props.workspace} theme={props.theme} compact={compact} />}
     <Conversation entries={props.transcript} theme={props.theme} />
     {props.approval
@@ -41,7 +40,7 @@ export function ChatScreen(props: Props) {
       : busy
         ? null
         : <Composer value={props.value} onChange={props.onChange} onSubmit={props.onSubmit} suggestions={visibleSuggestions} selected={props.selected} theme={props.theme} compact={compact} />}
-    {!tiny && <StatusBar status={props.status} spinner={props.spinner} theme={props.theme} />}
-    {tiny && busy && <text fg={props.theme.accent}>WORKING   CTRL+C CANCEL</text>}
+    {!tiny && <StatusBar status={props.status} theme={props.theme} />}
+    {tiny && busy && <StatusBar status={props.status} theme={props.theme} compact />}
   </box>
 }

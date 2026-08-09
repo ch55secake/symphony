@@ -561,10 +561,11 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				if err := json.Unmarshal(message.Payload, &request); err != nil || pending == nil || operation != nil {
 					continue
 				}
+				approval := pending
+				pending = nil
 				if err := sendUIState(sendState, config, messages, activities, nil, "WORKING"); err != nil {
 					return err
 				}
-				approval := pending
 				afterMessages := len(messages)
 				startOperation(func(operationCtx context.Context) (agent.LoopResult, error) {
 					observer := func(activity agent.ToolActivity) {

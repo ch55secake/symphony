@@ -4,6 +4,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { commands } from "../commands/registry"
 import { SelectionList } from "../components/SelectionList"
+import { WorkingIndicator } from "../components/WorkingIndicator"
 import { getTheme } from "../theme/tokens"
 import { ChatScreen } from "./ChatScreen"
 
@@ -29,7 +30,6 @@ describe("ChatScreen", () => {
       onSubmit={() => {}}
       suggestions={[...commands]}
       selected={0}
-      spinner={0}
       theme={getTheme()}
       width={100}
       height={30}
@@ -38,8 +38,10 @@ describe("ChatScreen", () => {
     await setup!.flush()
     const frame = setup!.captureCharFrame()
     for (const command of commands) expect(frame.match(new RegExp(command.name.replace("/", "\\/"), "g"))?.length).toBe(1)
-    expect(frame).toContain("ASK")
+    expect(frame).toContain(">")
     expect(frame).toContain("Please inspect the project")
+    const paintedBackgrounds = setup!.captureSpans().lines.flatMap((line) => line.spans).filter((span) => span.text.trim()).filter((span) => span.bg.a !== 0)
+    expect(paintedBackgrounds).toEqual([])
   })
 
   test("renders safe command activity metadata", async () => {
@@ -48,14 +50,13 @@ describe("ChatScreen", () => {
       provider="openai"
       model="test-model"
       workspace="/workspace"
-      status="WORKING"
+      status="READY"
       transcript={[{ role: "activity", label: "test-model", tool: { id: "call-1", name: "run_command", phase: "running", command: "go test ./...", working_directory: "workspace", output_hidden: true } }]}
       value=""
       onChange={() => {}}
       onSubmit={() => {}}
       suggestions={[]}
       selected={0}
-      spinner={0}
       theme={getTheme()}
       width={100}
       height={24}
@@ -66,6 +67,45 @@ describe("ChatScreen", () => {
     expect(frame).toContain("Running")
     expect(frame).toContain("go test ./...")
     expect(frame).toContain("output hidden")
+  })
+
+  test("keeps approval controls separate from the requested command", async () => {
+    const command = "go test ./internal/store/kurrentdb -run TestAppendToSessionStream"
+    await act(async () => {
+      setup = await testRender(<ChatScreen
+      provider="openai"
+      model="test-model"
+      workspace="/workspace"
+      status="AWAITING APPROVAL"
+      transcript={[{ role: "activity", label: "test-model", tool: { id: "call-1", name: "run_command", phase: "awaiting_approval", command, working_directory: "workspace" } }]}
+      approval={{ action: "run_command", summary: "run go (4 arguments)", hash: "sha256:test" }}
+      value=""
+      onChange={() => {}}
+      onSubmit={() => {}}
+      suggestions={[]}
+      selected={0}
+      theme={getTheme()}
+      width={64}
+      height={15}
+      />, { width: 64, height: 15 })
+    })
+    await setup!.flush()
+    const lines = setup!.captureCharFrame().split("\n")
+    const commandRow = lines.findIndex((line) => line.includes("Wants to run"))
+    const decisionRow = lines.findIndex((line) => line.includes("[Y] APPROVE"))
+    expect(commandRow).toBeGreaterThanOrEqual(0)
+    expect(decisionRow).toBeGreaterThan(commandRow)
+    expect(lines[commandRow]).not.toContain("[Y] APPROVE")
+  })
+
+  test("renders the working pulse without a spinner glyph", async () => {
+    await act(async () => {
+      setup = await testRender(<WorkingIndicator status="WORKING" theme={getTheme()} animate={false} />, { width: 30, height: 3 })
+    })
+    await setup!.flush()
+    const frame = setup!.captureCharFrame()
+    expect(frame).toContain("●  WORKING")
+    expect(frame).not.toContain("|  WORKING")
   })
 
   test("scrolls a long selection list to the active option", async () => {

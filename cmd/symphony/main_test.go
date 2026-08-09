@@ -81,6 +81,11 @@ type cancelingProvider struct {
 	startedPath string
 }
 
+type approvalResumeProvider struct {
+	calls   int
+	resumed chan struct{}
+}
+
 type fakeReplayReader struct {
 	events    []events.Event
 	err       error
@@ -123,6 +128,18 @@ func (p *cancelingProvider) Complete(ctx context.Context, _ agent.CompletionRequ
 	return agent.Completion{}, ctx.Err()
 }
 
+func (p *approvalResumeProvider) Name() string { return "approval-resume" }
+
+func (p *approvalResumeProvider) Complete(ctx context.Context, _ agent.CompletionRequest) (agent.Completion, error) {
+	p.calls++
+	if p.calls == 1 {
+		return agent.Completion{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "write_file", Arguments: json.RawMessage(`{"path":"note.txt","content":"content"}`)}}, StopReason: "tool_use"}, nil
+	}
+	close(p.resumed)
+	<-ctx.Done()
+	return agent.Completion{}, ctx.Err()
+}
+
 func TestOpenTUICtrlCCancelsWorkThenQuits(t *testing.T) {
 	root := t.TempDir()
 	provider := &cancelingProvider{canceled: make(chan struct{}), startedPath: filepath.Join(root, "provider.started")}
@@ -162,6 +179,51 @@ done
 	}
 	if !hasEvent(store.events, events.ModelFailed) || len(store.events) == 0 || store.events[len(store.events)-1].Type != events.SessionFinished {
 		t.Fatalf("events = %#v, want finished session", store.events)
+	}
+}
+
+func TestOpenTUIApprovalDisappearsWhileWorkResumes(t *testing.T) {
+	root := t.TempDir()
+	provider := &approvalResumeProvider{resumed: make(chan struct{})}
+	factory, _ := testRuntime(t, root, provider, func(service *workspace.Service) ([]agent.Tool, error) {
+		tool, err := agent.NewWriteFileTool(service)
+		return []agent.Tool{tool}, err
+	})
+	executable := writeUIFixture(t, `#!/bin/sh
+printf '%s\n' '{"version":1,"type":"app.ready"}' >&4
+printf '%s\n' '{"version":1,"type":"chat.start"}' >&4
+printf '%s\n' '{"version":1,"type":"prompt.submit","payload":{"prompt":"write note"}}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"approval":'*) break ;; esac
+done
+printf '%s\n' '{"version":1,"type":"approval.resolve","payload":{"approved":true}}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in
+    *'"phase":"completed"'*)
+      case "$state" in *'"approval":'*) exit 23 ;; esac
+      break
+      ;;
+  esac
+done
+printf '%s\n' '{"version":1,"type":"app.quit"}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"type":"app.shutdown"'*) exit 0 ;; esac
+done
+`)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PROVIDER", "openai")
+	t.Setenv("MODEL", "test-model")
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runOpenTUI(ctx, factory, func(context.Context) error { return nil }, executable); err != nil {
+		t.Fatalf("runOpenTUI() error = %v", err)
+	}
+	select {
+	case <-provider.resumed:
+	default:
+		t.Fatal("provider did not resume after approval")
 	}
 }
 

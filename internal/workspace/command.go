@@ -28,6 +28,7 @@ var (
 	ErrCommandAlreadyApproved  = errors.New("command request is already approved")
 	ErrCommandAlreadyExecuted  = errors.New("command request has already been executed")
 	ErrCommandSessionMismatch  = errors.New("command request belongs to another session")
+	ErrCommandExecutionFailed  = errors.New("command execution failed")
 )
 
 // Command is a shell-free process invocation rooted in the workspace.
@@ -214,7 +215,7 @@ func (s *Service) persistCommandOutcome(ctx context.Context, handle *session.Han
 	}
 	request.pending = nil
 	if outcome.cause != nil {
-		return outcome.result, fmt.Errorf("run workspace command: %w", outcome.cause)
+		return outcome.result, fmt.Errorf("%w: %w", ErrCommandExecutionFailed, outcome.cause)
 	}
 	return outcome.result, nil
 }

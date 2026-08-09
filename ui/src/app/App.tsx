@@ -15,7 +15,6 @@ export function App({ transport }: { transport: Transport }) {
   const [value, setValue] = useState("")
   const [commandSelected, setCommandSelected] = useState(0)
   const [optionSelected, setOptionSelected] = useState(0)
-  const [spinner, setSpinner] = useState(0)
   const minimumSuggestionHeight = state.phase === "welcome" ? 18 : 15
   const suggestions = height < minimumSuggestionHeight ? [] : commandSuggestions(value)
   const theme = getTheme("theme" in state ? state.theme : undefined)
@@ -23,11 +22,6 @@ export function App({ transport }: { transport: Transport }) {
   useEffect(() => transport.subscribe(setState), [transport])
   useEffect(() => setCommandSelected(0), [value, state.phase])
   useEffect(() => setOptionSelected(0), [state.phase, state.phase === "select" ? state.selection : undefined])
-  useEffect(() => {
-    if (!("status" in state) || (state.status !== "WORKING" && state.status !== "CANCELING")) return
-    const timer = setInterval(() => setSpinner((frame) => (frame + 1) % 4), 120)
-    return () => clearInterval(timer)
-  }, [state])
 
   const submitPrompt = async (prompt: string) => {
     if (state.phase === "chat" && (state.status === "WORKING" || state.status === "CANCELING")) return
@@ -85,5 +79,5 @@ export function App({ transport }: { transport: Transport }) {
   if (state.phase === "select") return <SelectionScreen name={state.selection ?? "option"} options={state.options ?? []} selected={optionSelected} width={width} height={height} theme={theme} />
   if (state.phase === "confirm") return <ConfirmationScreen status={state.status} theme={theme} />
   if (state.phase === "settings") return <SettingsScreen provider={state.provider} model={state.model} themeName={state.theme} workspace={state.workspace} theme={theme} />
-  return <ChatScreen provider={state.provider} model={state.model} workspace={state.workspace} status={state.status} transcript={state.transcript ?? []} approval={state.approval} value={value} onChange={setValue} onSubmit={() => void submit()} suggestions={suggestions} selected={commandSelected} spinner={spinner} theme={theme} width={width} height={height} />
+  return <ChatScreen provider={state.provider} model={state.model} workspace={state.workspace} status={state.status} transcript={state.transcript ?? []} approval={state.approval} value={value} onChange={setValue} onSubmit={() => void submit()} suggestions={suggestions} selected={commandSelected} theme={theme} width={width} height={height} />
 }

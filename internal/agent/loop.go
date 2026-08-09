@@ -137,6 +137,7 @@ func (l *Loop) ApproveObserved(ctx context.Context, handle *session.Handle, acto
 	result.CallID = pending.ToolCallID
 	result.Name = pending.Action
 	if err != nil {
+		recoverable := errors.Is(err, workspace.ErrCommandExecutionFailed) && ctx.Err() == nil
 		if result.Content == "" {
 			result.Content = pending.Action + " failed"
 			result.Bytes = len(result.Content)
@@ -149,6 +150,9 @@ func (l *Loop) ApproveObserved(ctx context.Context, handle *session.Handle, acto
 		messages = append(messages, Message{Role: RoleUser, ToolResults: []ToolResult{result}})
 		if recordErr != nil {
 			return LoopResult{Messages: messages}, errors.Join(fmt.Errorf("execute approved action: %w", err), fmt.Errorf("record failed tool result: %w", recordErr))
+		}
+		if recoverable {
+			return l.resume(ctx, handle, actor, provider, pending, result, observer)
 		}
 		return LoopResult{Messages: messages}, fmt.Errorf("execute approved action: %w", err)
 	}
