@@ -202,6 +202,12 @@ The TUI always uses the current directory as the workspace.
 
 While chat is open, these commands manage the active session:
 
+- Build mode is the default implementation mode. Plan mode investigates the workspace and
+  proposes changes without exposing file writes. Both modes are session-only.
+- Press `Tab` with an empty composer to switch between Build and Plan. With text entered,
+  `Tab` keeps its command-completion behavior.
+- `/plan` switches to Plan mode; `/build` switches back to Build mode. Plan-mode shell
+  commands remain explicitly approval-gated, even when allow-all is enabled.
 - `/model` lists models for the active provider; `/model NAME` selects one directly.
 - `/theme default`, `/theme contrast`, and `/theme mono` persist a theme for the next session.
 - `/allow-all` enables automatic approval for workspace writes and commands for the current session. `/allow-all off` restores prompts. Every action remains recorded and constrained to the workspace.

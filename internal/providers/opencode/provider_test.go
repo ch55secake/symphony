@@ -65,7 +65,7 @@ func TestCompleteChatMapsToolsAndToolResults(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.Model != "kimi-test" || len(body.Tools) != 1 || body.Tools[0].Type != "function" || body.Tools[0].Function.Name != "read_file" || len(body.Messages) != 3 || body.Messages[2].Role != "tool" || body.Messages[2].ToolCallID != "call-1" {
+		if body.Model != "kimi-test" || len(body.Tools) != 1 || body.Tools[0].Type != "function" || body.Tools[0].Function.Name != "read_file" || len(body.Messages) != 4 || body.Messages[0].Role != "system" || body.Messages[3].Role != "tool" || body.Messages[3].ToolCallID != "call-1" {
 			t.Fatalf("request body = %#v, want mapped chat request", body)
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -78,7 +78,7 @@ func TestCompleteChatMapsToolsAndToolResults(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	completion, err := provider.Complete(context.Background(), agent.CompletionRequest{
-		Model: "kimi-test",
+		Model: "kimi-test", Instructions: "plan safely",
 		Messages: []agent.Message{
 			{Role: agent.RoleUser, Content: "read a file"},
 			{Role: agent.RoleAssistant, ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "read_file", Arguments: json.RawMessage(`{"path":"note.txt"}`)}}},

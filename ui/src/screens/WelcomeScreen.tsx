@@ -1,6 +1,7 @@
 import type { Command } from "../commands/registry"
 import { Brand } from "../components/Brand"
 import { Composer } from "../components/Composer"
+import type { Mode } from "../protocol/types"
 import type { Theme } from "../theme/tokens"
 
 type Props = {
@@ -12,6 +13,7 @@ type Props = {
   onSubmit: () => void
   suggestions: Command[]
   selected: number
+  mode: Mode
   theme: Theme
   width: number
   height: number
@@ -24,8 +26,8 @@ export function WelcomeScreen(props: Props) {
     <text fg={props.theme.model}>AUDITED CODING AGENT</text>
     <text fg={props.theme.muted}>{props.provider} / {props.model}{compact ? "" : `  |  ${props.workspace}`}</text>
     <box style={{ width: compact ? "100%" : "82%" }}>
-      <Composer value={props.value} onChange={props.onChange} onSubmit={props.onSubmit} suggestions={props.suggestions} selected={props.selected} theme={props.theme} compact={compact} />
+       <Composer value={props.value} onChange={props.onChange} onSubmit={props.onSubmit} suggestions={props.suggestions} selected={props.selected} mode={props.mode} theme={props.theme} compact={compact} />
     </box>
-    <text fg={props.theme.subtle}>ENTER STARTS   CTRL+C OR CTRL+Q QUITS</text>
+     <text fg={props.theme.subtle}>ENTER STARTS   TAB SWITCH MODE   CTRL+C OR CTRL+Q QUITS</text>
   </box>
 }

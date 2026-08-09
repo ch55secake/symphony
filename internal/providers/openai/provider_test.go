@@ -23,9 +23,10 @@ func TestCompleteMapsResponseAndDisablesOpenAIStorage(t *testing.T) {
 			t.Fatalf("authorization = %q, want API key", got)
 		}
 		var body struct {
-			Model string `json:"model"`
-			Store bool   `json:"store"`
-			Input []struct {
+			Model        string `json:"model"`
+			Instructions string `json:"instructions"`
+			Store        bool   `json:"store"`
+			Input        []struct {
 				Role    string `json:"role"`
 				Content string `json:"content"`
 			} `json:"input"`
@@ -37,7 +38,7 @@ func TestCompleteMapsResponseAndDisablesOpenAIStorage(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.Model != "gpt-test" || body.Store || len(body.Input) != 2 || body.Input[0].Role != "system" || len(body.Tools) != 1 || body.Tools[0].Type != "function" {
+		if body.Model != "gpt-test" || body.Instructions != "plan safely" || body.Store || len(body.Input) != 2 || body.Input[0].Role != "system" || len(body.Tools) != 1 || body.Tools[0].Type != "function" {
 			t.Fatalf("request body = %#v, want mapped response request", body)
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -57,7 +58,7 @@ func TestCompleteMapsResponseAndDisablesOpenAIStorage(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	completion, err := provider.Complete(context.Background(), agent.CompletionRequest{
-		Model: "gpt-test",
+		Model: "gpt-test", Instructions: "plan safely",
 		Messages: []agent.Message{
 			{Role: agent.RoleSystem, Content: "be helpful"},
 			{Role: agent.RoleUser, Content: "read the file"},

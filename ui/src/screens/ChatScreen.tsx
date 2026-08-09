@@ -4,7 +4,7 @@ import { Composer } from "../components/Composer"
 import { Conversation } from "../components/Conversation"
 import { Header } from "../components/Header"
 import { StatusBar } from "../components/StatusBar"
-import type { Approval, TranscriptEntry } from "../protocol/types"
+import type { Approval, Mode, TranscriptEntry } from "../protocol/types"
 import type { Theme } from "../theme/tokens"
 
 type Props = {
@@ -19,6 +19,7 @@ type Props = {
   onSubmit: () => void
   suggestions: Command[]
   selected: number
+  mode: Mode
   theme: Theme
   width: number
   height: number
@@ -33,14 +34,14 @@ export function ChatScreen(props: Props) {
   const busy = props.status === "WORKING" || props.status === "CANCELING"
   const visibleSuggestions = tiny ? [] : props.suggestions
   return <box flexDirection="column" padding={compact ? 0 : 1} gap={1} style={{ width: props.width, height: props.height }}>
-    {!tiny && <Header provider={props.provider} model={props.model} workspace={props.workspace} theme={props.theme} compact={compact} />}
+    {!tiny && <Header provider={props.provider} model={props.model} workspace={props.workspace} mode={props.mode} theme={props.theme} compact={compact} />}
     <Conversation entries={props.transcript} theme={props.theme} />
     {props.approval
       ? <ApprovalPanel approval={props.approval} theme={props.theme} compact={compact} />
       : busy
         ? null
-        : <Composer value={props.value} onChange={props.onChange} onSubmit={props.onSubmit} suggestions={visibleSuggestions} selected={props.selected} theme={props.theme} compact={compact} />}
-    {!tiny && <StatusBar status={props.status} theme={props.theme} />}
-    {tiny && busy && <StatusBar status={props.status} theme={props.theme} compact />}
+        : <Composer value={props.value} onChange={props.onChange} onSubmit={props.onSubmit} suggestions={visibleSuggestions} selected={props.selected} mode={props.mode} theme={props.theme} compact={compact} />}
+    {!tiny && <StatusBar status={props.status} mode={props.mode} theme={props.theme} />}
+    {tiny && busy && <StatusBar status={props.status} mode={props.mode} theme={props.theme} compact />}
   </box>
 }

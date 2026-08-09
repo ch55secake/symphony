@@ -28,7 +28,7 @@ func TestSendUIStateIncludesStructuredToolActivity(t *testing.T) {
 	var buffer bytes.Buffer
 	exitCode := 0
 	activities := []uiToolActivity{{AfterMessages: 1, Activity: agent.ToolActivity{ID: "call-1", Name: "run_command", Phase: agent.ActivityCompleted, Command: "go test ./...", ExitCode: &exitCode, OutputHidden: true}}}
-	if err := sendUIState(func(state ui.State) error { return ui.SendState(&buffer, state) }, config{provider: "openai", model: "test-model", workspace: "/workspace"}, []agent.Message{{Role: agent.RoleUser, Content: "test"}}, activities, nil, "READY"); err != nil {
+	if err := sendUIState(func(state ui.State) error { return ui.SendState(&buffer, state) }, config{provider: "openai", model: "test-model", workspace: "/workspace"}, []agent.Message{{Role: agent.RoleUser, Content: "test"}}, activities, nil, "READY", agent.ModeBuild); err != nil {
 		t.Fatalf("sendUIState() error = %v", err)
 	}
 	message, err := ui.Read(bufio.NewReader(&buffer))
@@ -86,6 +86,7 @@ func (s *approvalFailureStore) Append(ctx context.Context, event events.Event, e
 
 type fakeProvider struct {
 	completions []agent.Completion
+	calls       []agent.CompletionRequest
 	err         error
 }
 
@@ -118,7 +119,8 @@ func (r *fakeReplayReader) Close() error {
 
 func (p *fakeProvider) Name() string { return "fake" }
 
-func (p *fakeProvider) Complete(_ context.Context, _ agent.CompletionRequest) (agent.Completion, error) {
+func (p *fakeProvider) Complete(_ context.Context, request agent.CompletionRequest) (agent.Completion, error) {
+	p.calls = append(p.calls, request)
 	if p.err != nil {
 		return agent.Completion{}, p.err
 	}
@@ -342,6 +344,54 @@ done
 	}
 	if !hasEvent(store.events, events.ApprovalModeChanged) {
 		t.Fatalf("events = %#v, want approval mode change", store.events)
+	}
+}
+
+func TestOpenTUIModeSwitchesByCommandAndTabMessage(t *testing.T) {
+	root := t.TempDir()
+	provider := &fakeProvider{completions: []agent.Completion{{Content: "built"}}}
+	factory, store := testRuntime(t, root, provider, func(_ *workspace.Service) ([]agent.Tool, error) { return nil, nil })
+	executable := writeUIFixture(t, `#!/bin/sh
+printf '%s\n' '{"version":1,"type":"app.ready"}' >&4
+printf '%s\n' '{"version":1,"type":"mode.set","payload":{"mode":"plan","phase":"welcome"}}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"phase":"welcome"'*'"mode":"plan"'*) break ;; esac
+done
+printf '%s\n' '{"version":1,"type":"chat.start"}' >&4
+printf '%s\n' '{"version":1,"type":"prompt.submit","payload":{"prompt":"/build"}}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"status":"Mode: build"'*) break ;; esac
+done
+printf '%s\n' '{"version":1,"type":"prompt.submit","payload":{"prompt":"inspect"}}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"status":"READY"'*) break ;; esac
+done
+printf '%s\n' '{"version":1,"type":"app.quit"}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"type":"app.shutdown"'*) exit 0 ;; esac
+done
+`)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PROVIDER", "openai")
+	t.Setenv("MODEL", "test-model")
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runOpenTUI(ctx, factory, func(context.Context) error { return nil }, executable); err != nil {
+		t.Fatalf("runOpenTUI() error = %v", err)
+	}
+	if len(provider.calls) != 1 || !strings.Contains(provider.calls[0].Instructions, "Build mode") {
+		t.Fatalf("provider calls = %#v, want build instructions", provider.calls)
+	}
+	modeChanges := 0
+	for _, event := range store.events {
+		if event.Type == events.SessionConfigChanged {
+			modeChanges++
+		}
+	}
+	if modeChanges < 2 {
+		t.Fatalf("events = %#v, want mode changes", store.events)
 	}
 }
 

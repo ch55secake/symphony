@@ -251,7 +251,8 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 	activities := []uiToolActivity{}
 	var pending *agent.PendingApproval
 	allowAll := false
-	if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat"}); err != nil {
+	mode := agent.ModeBuild
+	if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat", Mode: string(mode)}); err != nil {
 		return err
 	}
 	stateUpdates := make(chan ui.State, 1)
@@ -290,6 +291,12 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			}
 		}
 		return nil
+	}
+	sendModeState := func(phase, status string) error {
+		if phase == "welcome" {
+			return sendState(ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Mode: string(mode)})
+		}
+		return sendUIState(sendState, config, messages, activities, pending, status, mode)
 	}
 	type readResult struct {
 		message ui.Message
@@ -389,7 +396,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				if errors.Is(completed.err, context.Canceled) {
 					status = "Canceled"
 				}
-				if err := sendUIState(sendState, config, messages, activities, pending, status); err != nil {
+				if err := sendUIState(sendState, config, messages, activities, pending, status, mode); err != nil {
 					return err
 				}
 				continue
@@ -397,13 +404,13 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			resolvingApproval = nil
 			messages, pending = completed.result.Messages, completed.result.Pending
 			activities = alignUIActivities(messages, activities)
-			if err := sendUIState(sendState, config, messages, activities, pending, "READY"); err != nil {
+			if err := sendUIState(sendState, config, messages, activities, pending, "READY", mode); err != nil {
 				return err
 			}
 			continue
 		case update := <-activityUpdates:
 			activities = upsertUIActivity(activities, update)
-			if err := sendUIState(sendState, config, messages, activities, pending, "WORKING"); err != nil {
+			if err := sendUIState(sendState, config, messages, activities, pending, "WORKING", mode); err != nil {
 				return err
 			}
 			continue
@@ -421,7 +428,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			message := incoming.message
 			switch message.Type {
 			case "app.ready":
-				if err := sendState(ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat"}); err != nil {
+				if err := sendState(ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat", Mode: string(mode)}); err != nil {
 					return err
 				}
 				continue
@@ -429,7 +436,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				if operation != nil {
 					continue
 				}
-				if err := sendUIState(sendState, config, messages, activities, pending, "READY"); err != nil {
+				if err := sendUIState(sendState, config, messages, activities, pending, "READY", mode); err != nil {
 					return err
 				}
 				continue
@@ -453,6 +460,32 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				}
 				cancelOperation()
 				continue
+			case "mode.set":
+				if operation != nil || pending != nil {
+					continue
+				}
+				var request struct {
+					Mode  string `json:"mode"`
+					Phase string `json:"phase"`
+				}
+				if err := json.Unmarshal(message.Payload, &request); err != nil || (request.Phase != "welcome" && request.Phase != "chat") {
+					continue
+				}
+				nextMode, err := parseMode(request.Mode)
+				if err != nil {
+					continue
+				}
+				if err := recordModeChange(ctx, runtime, handle, mode, nextMode); err != nil {
+					if err := sendModeState(request.Phase, displayUIError(err)); err != nil {
+						return err
+					}
+					continue
+				}
+				mode = nextMode
+				if err := sendModeState(request.Phase, fmt.Sprintf("Mode: %s", mode)); err != nil {
+					return err
+				}
+				continue
 			case "prompt.submit":
 				var request struct {
 					Prompt string `json:"prompt"`
@@ -462,28 +495,44 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				}
 				command := strings.TrimSpace(request.Prompt)
 				switch command {
+				case "/plan", "/build":
+					nextMode := agent.ModePlan
+					if command == "/build" {
+						nextMode = agent.ModeBuild
+					}
+					if err := recordModeChange(ctx, runtime, handle, mode, nextMode); err != nil {
+						if err := sendUIState(sendState, config, messages, activities, pending, displayUIError(err), mode); err != nil {
+							return err
+						}
+						continue
+					}
+					mode = nextMode
+					if err := sendUIState(sendState, config, messages, activities, pending, fmt.Sprintf("Mode: %s", mode), mode); err != nil {
+						return err
+					}
+					continue
 				case "/model":
 					available, err := listUIModels(ctx, runtime, handle, config)
 					if err != nil {
-						_ = sendUIState(sendState, config, messages, activities, pending, displayUIError(err))
+						_ = sendUIState(sendState, config, messages, activities, pending, displayUIError(err), mode)
 						continue
 					}
-					if err := sendState(ui.State{Phase: "select", Selection: "model", Options: available, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a model"}); err != nil {
+					if err := sendState(ui.State{Phase: "select", Selection: "model", Options: available, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a model", Mode: string(mode)}); err != nil {
 						return err
 					}
 					continue
 				case "/theme":
-					if err := sendState(ui.State{Phase: "select", Selection: "theme", Options: []string{"default", "contrast", "mono"}, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a theme"}); err != nil {
+					if err := sendState(ui.State{Phase: "select", Selection: "theme", Options: []string{"default", "contrast", "mono"}, Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Select a theme", Mode: string(mode)}); err != nil {
 						return err
 					}
 					continue
 				case "/allow-all", "/allow-all on":
-					if err := sendState(ui.State{Phase: "confirm", Selection: "allow-all", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Allow all workspace writes and commands for this session?"}); err != nil {
+					if err := sendState(ui.State{Phase: "confirm", Selection: "allow-all", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Allow all workspace writes and commands for this session?", Mode: string(mode)}); err != nil {
 						return err
 					}
 					continue
 				case "/settings":
-					if err := sendState(ui.State{Phase: "settings", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Choose a setting", AllowAll: allowAll}); err != nil {
+					if err := sendState(ui.State{Phase: "settings", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Choose a setting", AllowAll: allowAll, Mode: string(mode)}); err != nil {
 						return err
 					}
 					continue
@@ -492,14 +541,14 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 					status, updatedAllowAll, handled := handleUICommand(ctx, runtime, handle, &config, request.Prompt, allowAll)
 					if handled {
 						allowAll = updatedAllowAll
-						if err := sendUIState(sendState, config, messages, activities, pending, status); err != nil {
+						if err := sendUIState(sendState, config, messages, activities, pending, status, mode); err != nil {
 							return err
 						}
 						continue
 					}
 				}
 				messages = append(messages, agent.Message{Role: agent.RoleUser, Content: request.Prompt})
-				if err := sendUIState(sendState, config, messages, activities, nil, "WORKING"); err != nil {
+				if err := sendUIState(sendState, config, messages, activities, nil, "WORKING", mode); err != nil {
 					return err
 				}
 				requestMessages := append([]agent.Message(nil), messages...)
@@ -511,8 +560,9 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 						default:
 						}
 					}
-					result, err := runtime.loop.RunWithApprovalObserved(operationCtx, handle, actor, runtime.provider, agent.CompletionRequest{Model: config.model, Messages: requestMessages, Tools: runtime.tools}, observer)
-					for err == nil && result.Pending != nil && allowAll {
+					operationMode := mode
+					result, err := runtime.loop.RunWithApprovalObserved(operationCtx, handle, actor, runtime.provider, agent.CompletionRequest{Model: config.model, Instructions: operationMode.Instructions(), Messages: requestMessages, Tools: agent.ToolsForMode(runtime.tools, operationMode)}, observer)
+					for err == nil && result.Pending != nil && allowAll && operationMode == agent.ModeBuild {
 						result, err = runtime.loop.ApproveObserved(operationCtx, handle, actor, runtime.provider, result.Pending, observer)
 					}
 					return result, err
@@ -537,7 +587,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				command := "/" + request.Selection + " " + request.Value
 				status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, command, allowAll)
 				allowAll = updatedAllowAll
-				if err := sendUIState(sendState, config, messages, activities, pending, status); err != nil {
+				if err := sendUIState(sendState, config, messages, activities, pending, status, mode); err != nil {
 					return err
 				}
 				continue
@@ -549,14 +599,14 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 					Approved bool `json:"approved"`
 				}
 				if err := json.Unmarshal(message.Payload, &request); err != nil || !request.Approved {
-					if err := sendUIState(sendState, config, messages, activities, pending, "Allow all canceled"); err != nil {
+					if err := sendUIState(sendState, config, messages, activities, pending, "Allow all canceled", mode); err != nil {
 						return err
 					}
 					continue
 				}
 				status, updatedAllowAll, _ := handleUICommand(ctx, runtime, handle, &config, "/allow-all on", allowAll)
 				allowAll = updatedAllowAll
-				if err := sendUIState(sendState, config, messages, activities, pending, status); err != nil {
+				if err := sendUIState(sendState, config, messages, activities, pending, status, mode); err != nil {
 					return err
 				}
 				continue
@@ -570,7 +620,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				approval := pending
 				pending = nil
 				resolvingApproval = approval
-				if err := sendUIState(sendState, config, messages, activities, nil, "WORKING"); err != nil {
+				if err := sendUIState(sendState, config, messages, activities, nil, "WORKING", mode); err != nil {
 					return err
 				}
 				afterMessages := len(messages)
@@ -588,7 +638,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				})
 				continue
 			}
-			if err := sendUIState(sendState, config, messages, activities, pending, "READY"); err != nil {
+			if err := sendUIState(sendState, config, messages, activities, pending, "READY", mode); err != nil {
 				return err
 			}
 		}
@@ -618,6 +668,25 @@ func activeTheme() string {
 	return settings.Theme
 }
 
+func parseMode(value string) (agent.Mode, error) {
+	switch agent.Mode(value) {
+	case agent.ModeBuild, agent.ModePlan:
+		return agent.Mode(value), nil
+	default:
+		return "", fmt.Errorf("unknown session mode %q", value)
+	}
+}
+
+func recordModeChange(ctx context.Context, runtime *runtime, handle *session.Handle, current, next agent.Mode) error {
+	if current == next {
+		return nil
+	}
+	if err := runtime.sessions.Record(ctx, handle, events.SessionConfigChanged, actor, events.SessionConfigChangedPayload{Setting: "mode", Previous: string(current), Current: string(next)}); err != nil {
+		return fmt.Errorf("record mode change: %w", err)
+	}
+	return nil
+}
+
 func handleUICommand(ctx context.Context, runtime *runtime, handle *session.Handle, config *config, input string, allowAll bool) (string, bool, bool) {
 	parts := strings.Fields(input)
 	if len(parts) == 0 {
@@ -625,7 +694,7 @@ func handleUICommand(ctx context.Context, runtime *runtime, handle *session.Hand
 	}
 	switch parts[0] {
 	case "/help":
-		return "Commands: /model [NAME], /theme [default|contrast|mono], /allow-all [on|off], /settings", allowAll, true
+		return "Commands: /plan, /build, /model [NAME], /theme [default|contrast|mono], /allow-all [on|off], /settings", allowAll, true
 	case "/settings":
 		settings, err := appconfig.Load()
 		if err != nil {
@@ -704,7 +773,7 @@ func currentWorkspace() (string, error) {
 	return workspace, nil
 }
 
-func sendUIState(send func(ui.State) error, config config, messages []agent.Message, activities []uiToolActivity, pending *agent.PendingApproval, status string) error {
+func sendUIState(send func(ui.State) error, config config, messages []agent.Message, activities []uiToolActivity, pending *agent.PendingApproval, status string, mode agent.Mode) error {
 	transcript := make([]ui.TranscriptEntry, 0, len(messages)+len(activities))
 	for index, message := range messages {
 		label, role := "You", "user"
@@ -717,7 +786,7 @@ func sendUIState(send func(ui.State) error, config config, messages []agent.Mess
 		transcript = appendToolActivities(transcript, activities, index+1, config.model)
 	}
 	transcript = appendToolActivities(transcript, activities, len(messages)+1, config.model)
-	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Transcript: transcript}
+	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Transcript: transcript, Mode: string(mode)}
 	if pending != nil {
 		state.Approval = &ui.Approval{Action: pending.Action, Summary: pending.Summary, Hash: pending.Hash}
 	}
