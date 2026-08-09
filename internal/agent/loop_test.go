@@ -404,7 +404,7 @@ func TestRunCommandToolPausesThenApprovesAndResumes(t *testing.T) {
 	}
 }
 
-func TestRunCommandFailureReturnsCompleteToolHistory(t *testing.T) {
+func TestRunCommandFailureResumesForCorrectedCommand(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	store := &recordingStore{}
@@ -416,29 +416,47 @@ func TestRunCommandFailureReturnsCompleteToolHistory(t *testing.T) {
 	turns, _ := New(sessions)
 	workspaceService, _ := workspace.New(sessions, root)
 	commandTool, _ := NewRunCommandTool(workspaceService)
-	loop, _ := NewLoop(turns, []Tool{commandTool}, 2)
-	provider := &sequentialProvider{completions: []Completion{{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "run_command", Arguments: json.RawMessage(`{"executable":"sh","arguments":["-c","printf failed-output; exit 7"]}`)}}}}}
+	loop, _ := NewLoop(turns, []Tool{commandTool}, 3)
+	provider := &sequentialProvider{completions: []Completion{
+		{ToolCalls: []events.ModelToolCall{{ID: "call-1", Name: "run_command", Arguments: json.RawMessage(`{"executable":"sh","arguments":["-c","printf failed-output; exit 7"]}`)}}},
+		{ToolCalls: []events.ModelToolCall{{ID: "call-2", Name: "run_command", Arguments: json.RawMessage(`{"executable":"sh","arguments":["-c","printf corrected-output"]}`)}}},
+		{Content: "command corrected"},
+	}}
 	paused, err := loop.RunWithApproval(context.Background(), handle, "user", provider, CompletionRequest{Model: "test-model", Messages: []Message{{Role: RoleUser, Content: "run command"}}})
 	if err != nil || paused.Pending == nil {
 		t.Fatalf("RunWithApproval() result = %#v, error = %v", paused, err)
 	}
 	var activities []ToolActivity
-	failed, err := loop.ApproveObserved(context.Background(), handle, "user", provider, paused.Pending, func(activity ToolActivity) { activities = append(activities, activity) })
-	if err == nil {
-		t.Fatal("ApproveObserved() error = nil, want command failure")
+	retry, err := loop.ApproveObserved(context.Background(), handle, "user", provider, paused.Pending, func(activity ToolActivity) { activities = append(activities, activity) })
+	if err != nil || retry.Pending == nil {
+		t.Fatalf("ApproveObserved() result = %#v, error = %v; want corrected command approval", retry, err)
 	}
-	if len(failed.Messages) == 0 || len(failed.Messages[len(failed.Messages)-1].ToolResults) != 1 {
-		t.Fatalf("messages = %#v, want failed tool result", failed.Messages)
+	if len(provider.calls) != 2 || len(provider.calls[1].Messages) == 0 {
+		t.Fatalf("provider calls = %#v, want failed command follow-up", provider.calls)
 	}
-	result := failed.Messages[len(failed.Messages)-1].ToolResults[0]
+	failureMessage := provider.calls[1].Messages[len(provider.calls[1].Messages)-1]
+	if len(failureMessage.ToolResults) != 1 {
+		t.Fatalf("follow-up message = %#v, want failed tool result", failureMessage)
+	}
+	result := failureMessage.ToolResults[0]
 	if result.CallID != "call-1" || result.Name != "run_command" || !result.IsError || result.ExitCode == nil || *result.ExitCode != 7 {
 		t.Fatalf("tool result = %#v", result)
 	}
-	if len(activities) != 2 || activities[0].Phase != ActivityRunning || activities[1].Phase != ActivityFailed {
-		t.Fatalf("activities = %#v", activities)
+	if len(activities) != 4 || activities[0].Phase != ActivityRunning || activities[1].Phase != ActivityFailed || activities[2].Phase != ActivityRequested || activities[3].Phase != ActivityAwaitingApproval {
+		t.Fatalf("activities = %#v, want failed command followed by corrected approval", activities)
 	}
-	if !hasEventType(store.events, events.CommandFailed) || !hasEventType(store.events, events.ToolResultV2) {
-		t.Fatalf("events = %#v, want command and tool failures", store.events)
+	resumed, err := loop.ApproveObserved(context.Background(), handle, "user", provider, retry.Pending, func(activity ToolActivity) { activities = append(activities, activity) })
+	if err != nil || resumed.Completion == nil || resumed.Completion.Content != "command corrected" {
+		t.Fatalf("corrected ApproveObserved() result = %#v, error = %v", resumed, err)
+	}
+	if len(provider.calls) != 3 || len(activities) != 6 || activities[4].Phase != ActivityRunning || activities[5].Phase != ActivityCompleted {
+		t.Fatalf("provider calls = %d, activities = %#v; want successful corrected command", len(provider.calls), activities)
+	}
+	failedIndex := eventIndex(store.events, events.CommandFailed)
+	resultIndex := eventIndex(store.events, events.ToolResultV2)
+	retryIndex := eventIndexAfter(store.events, events.ModelRequested, resultIndex+1)
+	if failedIndex < 0 || resultIndex <= failedIndex || retryIndex <= resultIndex || !hasEventType(store.events, events.CommandCompleted) {
+		t.Fatalf("events = %#v, want persisted failure and tool result before retry", store.events)
 	}
 	for _, event := range store.events {
 		if event.Type != events.ToolResultV2 {
@@ -454,6 +472,19 @@ func TestRunCommandFailureReturnsCompleteToolHistory(t *testing.T) {
 		return
 	}
 	t.Fatal("tool.result.v2 event not found")
+}
+
+func eventIndex(recorded []events.Event, eventType events.Type) int {
+	return eventIndexAfter(recorded, eventType, 0)
+}
+
+func eventIndexAfter(recorded []events.Event, eventType events.Type, start int) int {
+	for index := start; index < len(recorded); index++ {
+		if recorded[index].Type == eventType {
+			return index
+		}
+	}
+	return -1
 }
 
 func TestResumeFailureRetainsToolResultHistory(t *testing.T) {

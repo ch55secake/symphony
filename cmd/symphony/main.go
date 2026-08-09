@@ -318,6 +318,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 	}()
 	var operation <-chan operationResult
 	var cancelOperation context.CancelFunc
+	var resolvingApproval *agent.PendingApproval
 	startOperation := func(run func(context.Context) (agent.LoopResult, error)) {
 		operationCtx, cancel := context.WithCancel(ctx)
 		results := make(chan operationResult, 1)
@@ -377,6 +378,10 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 					messages = completed.result.Messages
 					activities = alignUIActivities(messages, activities)
 				}
+				if resolvingApproval != nil && !resolvingApproval.Used() {
+					pending = resolvingApproval
+				}
+				resolvingApproval = nil
 				if pending != nil && pending.Used() {
 					pending = nil
 				}
@@ -389,6 +394,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				}
 				continue
 			}
+			resolvingApproval = nil
 			messages, pending = completed.result.Messages, completed.result.Pending
 			activities = alignUIActivities(messages, activities)
 			if err := sendUIState(sendState, config, messages, activities, pending, "READY"); err != nil {
@@ -561,10 +567,12 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				if err := json.Unmarshal(message.Payload, &request); err != nil || pending == nil || operation != nil {
 					continue
 				}
+				approval := pending
+				pending = nil
+				resolvingApproval = approval
 				if err := sendUIState(sendState, config, messages, activities, nil, "WORKING"); err != nil {
 					return err
 				}
-				approval := pending
 				afterMessages := len(messages)
 				startOperation(func(operationCtx context.Context) (agent.LoopResult, error) {
 					observer := func(activity agent.ToolActivity) {

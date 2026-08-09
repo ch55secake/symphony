@@ -136,6 +136,9 @@ func TestCommandRecordsFailures(t *testing.T) {
 			if err == nil {
 				t.Fatal("ExecuteCommand() error = nil, want failure")
 			}
+			if !errors.Is(err, ErrCommandExecutionFailed) {
+				t.Fatalf("ExecuteCommand() error = %v, want ErrCommandExecutionFailed", err)
+			}
 			if result.ExitCode != test.exitCode {
 				t.Fatalf("exit code = %d, want %d", result.ExitCode, test.exitCode)
 			}
@@ -192,6 +195,8 @@ func TestCommandRetriesOutcomePersistenceWithoutRerunning(t *testing.T) {
 			}
 			if _, err := commands.ExecuteCommand(context.Background(), handle, "agent", request, test.command); err == nil {
 				t.Fatal("first ExecuteCommand() error = nil, want outcome persistence failure")
+			} else if errors.Is(err, ErrCommandExecutionFailed) {
+				t.Fatalf("first ExecuteCommand() error = %v, must remain an infrastructure failure", err)
 			}
 			_, err = commands.ExecuteCommand(context.Background(), handle, "agent", request, test.command)
 			if test.want != nil && !errors.Is(err, test.want) {
