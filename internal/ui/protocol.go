@@ -32,6 +32,7 @@ type State struct {
 	Selection  string            `json:"selection,omitempty"`
 	Options    []string          `json:"options,omitempty"`
 	AllowAll   bool              `json:"allow_all,omitempty"`
+	Mode       string            `json:"mode,omitempty"`
 }
 
 // Approval contains only the operator-safe details needed by the UI.

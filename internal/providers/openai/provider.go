@@ -93,10 +93,11 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 }
 
 type responsesRequest struct {
-	Model string         `json:"model"`
-	Input []any          `json:"input"`
-	Tools []functionTool `json:"tools,omitempty"`
-	Store bool           `json:"store"`
+	Model        string         `json:"model"`
+	Instructions string         `json:"instructions,omitempty"`
+	Input        []any          `json:"input"`
+	Tools        []functionTool `json:"tools,omitempty"`
+	Store        bool           `json:"store"`
 }
 
 type inputMessage struct {
@@ -147,7 +148,7 @@ func toRequest(request agent.CompletionRequest) responsesRequest {
 			Parameters:  tool.InputSchema,
 		})
 	}
-	return responsesRequest{Model: request.Model, Input: input, Tools: tools, Store: false}
+	return responsesRequest{Model: request.Model, Instructions: request.Instructions, Input: input, Tools: tools, Store: false}
 }
 
 type responsesResponse struct {

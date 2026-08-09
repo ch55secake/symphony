@@ -54,3 +54,21 @@ func TestSendStateIncludesApprovalMode(t *testing.T) {
 		t.Fatal("allow_all = false, want true")
 	}
 }
+
+func TestSendStateIncludesSessionMode(t *testing.T) {
+	var buffer bytes.Buffer
+	if err := SendState(&buffer, State{Phase: "chat", Mode: "plan"}); err != nil {
+		t.Fatalf("SendState() error = %v", err)
+	}
+	message, err := Read(bufio.NewReader(&buffer))
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	var state State
+	if err := json.Unmarshal(message.Payload, &state); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if state.Mode != "plan" {
+		t.Fatalf("mode = %q, want plan", state.Mode)
+	}
+}

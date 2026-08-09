@@ -21,6 +21,7 @@ var (
 	ErrApprovalPending = errors.New("action approval is pending")
 	ErrApprovalUsed    = errors.New("approval has already been resolved")
 	ErrApprovalSession = errors.New("approval belongs to another session")
+	ErrToolUnavailable = errors.New("tool is unavailable in the active mode")
 )
 
 // Tool dispatches a provider-requested call to a native Symphony capability.
@@ -234,6 +235,15 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 			return LoopResult{}, ErrMaxToolRounds
 		}
 		for _, call := range completion.ToolCalls {
+			if !toolDefinitionAvailable(current.Tools, call.Name) {
+				result := failedToolResult(call, "tool is unavailable in the active mode")
+				if err := l.recordToolResult(ctx, handle, call.Name, result); err != nil {
+					return LoopResult{Messages: toolConversation(current.Messages, completion, []ToolResult{result})}, fmt.Errorf("record unavailable tool result: %w", err)
+				}
+				return LoopResult{Messages: toolConversation(current.Messages, completion, []ToolResult{result})}, fmt.Errorf("%w: %s", ErrToolUnavailable, call.Name)
+			}
+		}
+		for _, call := range completion.ToolCalls {
 			emitActivity(observer, ProjectToolActivity(call, ActivityRequested))
 		}
 		if pending, ok, err := l.requestApproval(ctx, handle, actor, current, completion, round, observer); err != nil {
@@ -274,6 +284,18 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 		}
 		current.Messages = toolConversation(current.Messages, completion, results)
 	}
+}
+
+func toolDefinitionAvailable(tools []ToolDefinition, name string) bool {
+	if len(tools) == 0 {
+		return true
+	}
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *Loop) recordToolResult(ctx context.Context, handle *session.Handle, actor string, result ToolResult) error {

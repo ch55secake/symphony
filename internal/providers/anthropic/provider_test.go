@@ -39,7 +39,7 @@ func TestCompleteMapsMessagesAndToolUse(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.Model != "claude-test" || body.MaxTokens != 512 || body.System != "first system\n\nsecond system" || len(body.Messages) != 2 || body.Messages[0].Role != "user" || len(body.Tools) != 1 || body.Tools[0].Name != "read_file" {
+		if body.Model != "claude-test" || body.MaxTokens != 512 || body.System != "plan safely\n\nfirst system\n\nsecond system" || len(body.Messages) != 2 || body.Messages[0].Role != "user" || len(body.Tools) != 1 || body.Tools[0].Name != "read_file" {
 			t.Fatalf("request body = %#v, want mapped Messages request", body)
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -59,7 +59,7 @@ func TestCompleteMapsMessagesAndToolUse(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	completion, err := provider.Complete(context.Background(), agent.CompletionRequest{
-		Model: "claude-test",
+		Model: "claude-test", Instructions: "plan safely",
 		Messages: []agent.Message{
 			{Role: agent.RoleSystem, Content: "first system"},
 			{Role: agent.RoleUser, Content: "read the file"},

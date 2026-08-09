@@ -162,7 +162,10 @@ type chatRequestFunction struct {
 }
 
 func toChatRequest(request agent.CompletionRequest) chatRequest {
-	messages := make([]chatMessage, 0, len(request.Messages))
+	messages := make([]chatMessage, 0, len(request.Messages)+1)
+	if request.Instructions != "" {
+		messages = append(messages, chatMessage{Role: agent.RoleSystem, Content: request.Instructions})
+	}
 	for _, message := range request.Messages {
 		if message.Content != "" || (len(message.ToolCalls) == 0 && len(message.ToolResults) == 0) {
 			messages = append(messages, chatMessage{Role: message.Role, Content: message.Content})

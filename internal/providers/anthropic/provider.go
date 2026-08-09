@@ -164,6 +164,9 @@ type toolDefinition struct {
 
 func toRequest(request agent.CompletionRequest, maxTokens int) (messagesRequest, error) {
 	system := make([]string, 0)
+	if request.Instructions != "" {
+		system = append(system, request.Instructions)
+	}
 	messages := make([]message, 0, len(request.Messages))
 	for _, item := range request.Messages {
 		switch item.Role {

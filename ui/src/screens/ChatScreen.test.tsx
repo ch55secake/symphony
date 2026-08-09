@@ -21,6 +21,7 @@ describe("ChatScreen", () => {
       model="test-model"
       workspace="/workspace"
       status="READY"
+      mode="build"
       transcript={[
         { role: "user", label: "You", content: "Please inspect the project" },
         { role: "assistant", label: "test-model", content: "I inspected several files and can continue with the requested work." },
@@ -39,6 +40,7 @@ describe("ChatScreen", () => {
     const frame = setup!.captureCharFrame()
     for (const command of commands) expect(frame.match(new RegExp(command.name.replace("/", "\\/"), "g"))?.length).toBe(1)
     expect(frame).toContain(">")
+    expect(frame).toContain("BUILD >")
     expect(frame).toContain("Please inspect the project")
     const paintedBackgrounds = setup!.captureSpans().lines.flatMap((line) => line.spans).filter((span) => span.text.trim()).filter((span) => span.bg.a !== 0)
     expect(paintedBackgrounds).toEqual([])
@@ -51,6 +53,7 @@ describe("ChatScreen", () => {
       model="test-model"
       workspace="/workspace"
       status="READY"
+      mode="build"
       transcript={[{ role: "activity", label: "test-model", tool: { id: "call-1", name: "run_command", phase: "running", command: "go test ./...", working_directory: "workspace", output_hidden: true } }]}
       value=""
       onChange={() => {}}
@@ -77,6 +80,7 @@ describe("ChatScreen", () => {
       model="test-model"
       workspace="/workspace"
       status="AWAITING APPROVAL"
+      mode="build"
       transcript={[{ role: "activity", label: "test-model", tool: { id: "call-1", name: "run_command", phase: "awaiting_approval", command, working_directory: "workspace" } }]}
       approval={{ action: "run_command", summary: "run go (4 arguments)", hash: "sha256:test" }}
       value=""

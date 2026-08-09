@@ -49,9 +49,10 @@ type ToolDefinition struct {
 
 // CompletionRequest is a provider-neutral model completion request.
 type CompletionRequest struct {
-	Model    string           `json:"model"`
-	Messages []Message        `json:"messages"`
-	Tools    []ToolDefinition `json:"tools,omitempty"`
+	Model        string           `json:"model"`
+	Instructions string           `json:"instructions,omitempty"`
+	Messages     []Message        `json:"messages"`
+	Tools        []ToolDefinition `json:"tools,omitempty"`
 }
 
 // Completion is a provider-neutral model completion response.

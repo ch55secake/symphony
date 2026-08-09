@@ -5,6 +5,8 @@ export type TranscriptEntry = {
   tool?: ToolActivity
 }
 
+export type Mode = "plan" | "build"
+
 export type ToolActivity = {
   id: string
   name: string
@@ -31,6 +33,7 @@ type SessionDetails = {
   workspace: string
   status?: string
   allow_all?: boolean
+  mode?: Mode
 }
 
 export type UIState =
@@ -50,4 +53,5 @@ export type ClientMessage =
   | { type: "app.ready" | "app.quit" | "app.cancel" | "chat.start" }
   | { type: "prompt.submit"; payload: { prompt: string } }
   | { type: "approval.resolve" | "allow-all.confirm"; payload: { approved: boolean } }
+  | { type: "mode.set"; payload: { mode: Mode; phase: "welcome" | "chat" } }
   | { type: "selection.submit"; payload: { selection: string; value: string } }
