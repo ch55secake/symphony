@@ -288,6 +288,13 @@ func TestWriteFileToolPausesThenApprovesAndResumes(t *testing.T) {
 	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.FileWriteApproved || store.events[8].Type != events.FileWriteCompleted || store.events[9].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want approved write lifecycle", store.events)
 	}
+	var completion events.ModelCompletedV2Payload
+	if err := json.Unmarshal(store.events[3].Payload, &completion); err != nil {
+		t.Fatalf("model completion payload = %v", err)
+	}
+	if strings.Contains(string(store.events[3].Payload), "new content") || len(completion.ToolCalls) != 1 || completion.ToolCalls[0].ArgumentsHash == "" {
+		t.Fatalf("model completion = %#v, want hashed tool-call arguments without content", completion)
+	}
 }
 
 func TestWriteFileToolDenialResumesWithErrorResult(t *testing.T) {
@@ -433,6 +440,20 @@ func TestRunCommandFailureReturnsCompleteToolHistory(t *testing.T) {
 	if !hasEventType(store.events, events.CommandFailed) || !hasEventType(store.events, events.ToolResultV2) {
 		t.Fatalf("events = %#v, want command and tool failures", store.events)
 	}
+	for _, event := range store.events {
+		if event.Type != events.ToolResultV2 {
+			continue
+		}
+		var payload events.ToolResultV2Payload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("tool result payload = %v", err)
+		}
+		if payload.ExitCode == nil || *payload.ExitCode != 7 || !payload.IsError {
+			t.Fatalf("tool result payload = %#v, want failed exit code 7", payload)
+		}
+		return
+	}
+	t.Fatal("tool.result.v2 event not found")
 }
 
 func TestResumeFailureRetainsToolResultHistory(t *testing.T) {
