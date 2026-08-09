@@ -160,13 +160,14 @@ func (s *Service) run(ctx context.Context, handle *session.Handle, actor string,
 
 // RecordToolResult persists a tool result before it is included in a follow-up request.
 func (s *Service) RecordToolResult(ctx context.Context, handle *session.Handle, actor string, result ToolResult) error {
-	return s.sessions.Record(ctx, handle, events.ToolResult, actor, events.ToolResultPayload{
+	return s.sessions.Record(ctx, handle, events.ToolResultV2, actor, events.ToolResultV2Payload{
 		CallID:    result.CallID,
 		Name:      result.Name,
 		IsError:   result.IsError,
 		Bytes:     result.Bytes,
 		Hash:      result.Hash,
 		Truncated: result.Truncated,
+		ExitCode:  result.ExitCode,
 	})
 }
 

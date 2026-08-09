@@ -32,6 +32,20 @@ esac
 	}
 }
 
+func TestChildCloseSuppressesExpectedTerminationError(t *testing.T) {
+	executable := writeTestExecutable(t, `#!/bin/sh
+trap '' TERM
+while :; do :; done
+`)
+	child, err := Start(context.Background(), executable)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := child.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil after intentional escalation", err)
+	}
+}
+
 func writeTestExecutable(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ui-child")

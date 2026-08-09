@@ -3,6 +3,7 @@ package ui
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -74,6 +75,7 @@ func (c *Child) Close() error {
 		return nil
 	}
 	c.close.Do(func() {
+		signaled := false
 		if c.Writer != nil {
 			requestDone := make(chan struct{})
 			go func() {
@@ -89,6 +91,7 @@ func (c *Child) Close() error {
 			}
 		}
 		if !c.wait(shutdownGracePeriod) && c.Command != nil && c.Command.Process != nil {
+			signaled = true
 			_ = c.Command.Process.Signal(syscall.SIGTERM)
 			if !c.wait(shutdownGracePeriod) {
 				_ = c.Command.Process.Kill()
@@ -97,6 +100,10 @@ func (c *Child) Close() error {
 		}
 		if c.reader != nil {
 			_ = c.reader.Close()
+		}
+		var exitErr *exec.ExitError
+		if signaled && errors.As(c.waitErr, &exitErr) {
+			c.waitErr = nil
 		}
 	})
 	return c.waitErr

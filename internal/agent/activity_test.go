@@ -20,8 +20,8 @@ func TestProjectToolActivityHidesWriteContent(t *testing.T) {
 }
 
 func TestProjectToolActivityRedactsCommandPreview(t *testing.T) {
-	activity := ProjectToolActivity(events.ModelToolCall{ID: "call-1", Name: "run_command", Arguments: json.RawMessage(`{"executable":"deploy","arguments":["--token","secret-value","OPENAI_API_KEY=another-secret","safe"],"working_directory":"src\nignored"}`)}, ActivityRequested)
-	if strings.Contains(activity.Command, "secret-value") || strings.Contains(activity.Command, "another-secret") || !strings.Contains(activity.Command, "[REDACTED]") || strings.Contains(activity.WorkingDirectory, "\n") {
+	activity := ProjectToolActivity(events.ModelToolCall{ID: "call-1", Name: "run_command", Arguments: json.RawMessage(`{"executable":"deploy","arguments":["--token","secret-value","--auth=auth-secret","--auth","space-secret","--access-key=access-secret","OPENAI_API_KEY=another-secret","safe"],"working_directory":"src\nignored"}`)}, ActivityRequested)
+	if strings.Contains(activity.Command, "secret-value") || strings.Contains(activity.Command, "auth-secret") || strings.Contains(activity.Command, "space-secret") || strings.Contains(activity.Command, "access-secret") || strings.Contains(activity.Command, "another-secret") || !strings.Contains(activity.Command, "[REDACTED]") || strings.Contains(activity.WorkingDirectory, "\n") {
 		t.Fatalf("activity = %#v", activity)
 	}
 }

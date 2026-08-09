@@ -14,12 +14,18 @@ import (
 type ActivityPhase string
 
 const (
-	ActivityRequested        ActivityPhase = "requested"
-	ActivityRunning          ActivityPhase = "running"
+	// ActivityRequested indicates that the model requested a tool invocation.
+	ActivityRequested ActivityPhase = "requested"
+	// ActivityRunning indicates that a tool is executing.
+	ActivityRunning ActivityPhase = "running"
+	// ActivityAwaitingApproval indicates that an operator decision is required.
 	ActivityAwaitingApproval ActivityPhase = "awaiting_approval"
-	ActivityCompleted        ActivityPhase = "completed"
-	ActivityFailed           ActivityPhase = "failed"
-	ActivityDenied           ActivityPhase = "denied"
+	// ActivityCompleted indicates successful tool execution.
+	ActivityCompleted ActivityPhase = "completed"
+	// ActivityFailed indicates that tool execution failed.
+	ActivityFailed ActivityPhase = "failed"
+	// ActivityDenied indicates that an operator denied the tool action.
+	ActivityDenied ActivityPhase = "denied"
 )
 
 // ToolActivity is an allowlisted, display-safe projection of a tool call.

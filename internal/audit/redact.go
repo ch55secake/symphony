@@ -21,7 +21,7 @@ type Policy struct {
 func DefaultPolicy() Policy {
 	return Policy{
 		KeyPatterns: []*regexp.Regexp{
-			regexp.MustCompile(`(?i)(?:^|[_-])(api[_-]?key|authorization|password|secret|token|credential)(?:$|[_-])`),
+			regexp.MustCompile(`(?i)(?:^|[_-])(api[_-]?key|access[_-]?key|authorization|auth|password|secret|token|credential)(?:$|[_-])`),
 		},
 		ValuePatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)bearer\s+[a-z0-9._-]+`),
@@ -88,7 +88,7 @@ func (p Policy) redact(value *any, path string, redactions *[]events.Redaction) 
 }
 
 func isSensitiveOption(value string) bool {
-	return regexp.MustCompile(`(?i)^--?(?:api[_-]?key|authorization|password|secret|token|credential)(?:=\S+)?$`).MatchString(strings.TrimSpace(value))
+	return regexp.MustCompile(`(?i)^--?(?:api[_-]?key|access[_-]?key|authorization|auth|password|secret|token|credential)(?:=\S+)?$`).MatchString(strings.TrimSpace(value))
 }
 
 func (p Policy) matchesKey(key string) bool {

@@ -88,7 +88,7 @@ func TestLoopPersistsReadOnlyToolSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if len(persisted) != 9 || persisted[6].Type != events.ToolResult || persisted[7].Type != events.ModelRequested || persisted[8].Type != events.ModelCompletedV2 {
+	if len(persisted) != 9 || persisted[6].Type != events.ToolResultV2 || persisted[7].Type != events.ModelRequested || persisted[8].Type != events.ModelCompletedV2 {
 		t.Fatalf("persisted events = %#v, want complete read-only tool loop", persisted)
 	}
 }
@@ -147,7 +147,7 @@ func TestLoopPersistsApprovedWriteSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if len(persisted) != 12 || persisted[5].Type != events.ApprovalRequested || persisted[6].Type != events.ApprovalGranted || persisted[8].Type != events.FileWriteCompleted || persisted[9].Type != events.ToolResult {
+	if len(persisted) != 12 || persisted[5].Type != events.ApprovalRequested || persisted[6].Type != events.ApprovalGranted || persisted[8].Type != events.FileWriteCompleted || persisted[9].Type != events.ToolResultV2 {
 		t.Fatalf("persisted events = %#v, want complete approved write sequence", persisted)
 	}
 }
@@ -203,7 +203,7 @@ func TestLoopPersistsApprovedCommandSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if len(persisted) != 12 || persisted[4].Type != events.CommandRequested || persisted[5].Type != events.ApprovalRequested || persisted[6].Type != events.ApprovalGranted || persisted[8].Type != events.CommandCompleted || persisted[9].Type != events.ToolResult {
+	if len(persisted) != 12 || persisted[4].Type != events.CommandRequested || persisted[5].Type != events.ApprovalRequested || persisted[6].Type != events.ApprovalGranted || persisted[8].Type != events.CommandCompleted || persisted[9].Type != events.ToolResultV2 {
 		t.Fatalf("persisted events = %#v, want complete approved command sequence", persisted)
 	}
 }

@@ -284,7 +284,10 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			case <-stateUpdates:
 			default:
 			}
-			stateUpdates <- state
+			select {
+			case stateUpdates <- state:
+			default:
+			}
 		}
 		return nil
 	}
@@ -433,10 +436,14 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 						return errors.New("timed out waiting for the active operation to stop")
 					}
 				}
-				return runtime.sessions.Finish(ctx, handle, actor, "quit")
+				finishCtx, cancelFinish := session.OutcomeContext(ctx)
+				defer cancelFinish()
+				return runtime.sessions.Finish(finishCtx, handle, actor, "quit")
 			case "app.cancel":
 				if cancelOperation == nil {
-					return runtime.sessions.Finish(ctx, handle, actor, "quit")
+					finishCtx, cancelFinish := session.OutcomeContext(ctx)
+					defer cancelFinish()
+					return runtime.sessions.Finish(finishCtx, handle, actor, "quit")
 				}
 				cancelOperation()
 				continue

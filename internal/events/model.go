@@ -68,3 +68,14 @@ type ToolResultPayload struct {
 	Hash      string `json:"hash"`
 	Truncated bool   `json:"truncated"`
 }
+
+// ToolResultV2Payload records a tool result including command exit status.
+type ToolResultV2Payload struct {
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	IsError   bool   `json:"is_error"`
+	Bytes     int    `json:"bytes"`
+	Hash      string `json:"hash"`
+	Truncated bool   `json:"truncated"`
+	ExitCode  *int   `json:"exit_code,omitempty"`
+}

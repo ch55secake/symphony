@@ -87,7 +87,7 @@ func TestLoopReadsFileAndContinuesTurn(t *testing.T) {
 	if len(followUp.Messages) != 3 || len(followUp.Messages[1].ToolCalls) != 1 || len(followUp.Messages[2].ToolResults) != 1 || followUp.Messages[2].ToolResults[0].Content != content {
 		t.Fatalf("follow-up messages = %#v, want assistant tool call and user result", followUp.Messages)
 	}
-	if len(store.events) != 9 || store.events[6].Type != events.ToolResult || store.events[7].Type != events.ModelRequested || store.events[8].Type != events.ModelCompletedV2 {
+	if len(store.events) != 9 || store.events[6].Type != events.ToolResultV2 || store.events[7].Type != events.ModelRequested || store.events[8].Type != events.ModelCompletedV2 {
 		t.Fatalf("events = %#v, want audited tool loop", store.events)
 	}
 	encoded, err := json.Marshal(store.events)
@@ -162,7 +162,7 @@ func TestLoopRecordsUnknownToolAndStops(t *testing.T) {
 	if !errors.Is(err, ErrUnknownTool) {
 		t.Fatalf("Run() error = %v, want ErrUnknownTool", err)
 	}
-	if len(store.events) != 5 || store.events[4].Type != events.ToolResult {
+	if len(store.events) != 5 || store.events[4].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want persisted unknown tool result", store.events)
 	}
 }
@@ -285,7 +285,7 @@ func TestWriteFileToolPausesThenApprovesAndResumes(t *testing.T) {
 	if content, err := os.ReadFile(filepath.Join(root, "note.txt")); err != nil || string(content) != "new content" {
 		t.Fatalf("written file = %q, %v", content, err)
 	}
-	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.FileWriteApproved || store.events[8].Type != events.FileWriteCompleted || store.events[9].Type != events.ToolResult {
+	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.FileWriteApproved || store.events[8].Type != events.FileWriteCompleted || store.events[9].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want approved write lifecycle", store.events)
 	}
 }
@@ -333,7 +333,7 @@ func TestWriteFileToolDenialResumesWithErrorResult(t *testing.T) {
 	if len(provider.calls) != 2 || len(provider.calls[1].Messages[2].ToolResults) != 1 || !provider.calls[1].Messages[2].ToolResults[0].IsError {
 		t.Fatalf("follow-up = %#v, want error tool result", provider.calls)
 	}
-	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResult {
+	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want denied approval lifecycle", store.events)
 	}
 }
@@ -385,8 +385,15 @@ func TestRunCommandToolPausesThenApprovesAndResumes(t *testing.T) {
 	if len(provider.calls) != 2 || provider.calls[1].Messages[2].ToolResults[0].CallID != "call-1" || provider.calls[1].Messages[2].ToolResults[0].Name != "run_command" || provider.calls[1].Messages[2].ToolResults[0].Content != "command-output" {
 		t.Fatalf("follow-up = %#v, want command output tool result", provider.calls)
 	}
-	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.CommandApproved || store.events[8].Type != events.CommandCompleted || store.events[9].Type != events.ToolResult {
+	if len(store.events) != 12 || store.events[6].Type != events.ApprovalGranted || store.events[7].Type != events.CommandApproved || store.events[8].Type != events.CommandCompleted || store.events[9].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want approved command lifecycle", store.events)
+	}
+	var toolResult events.ToolResultV2Payload
+	if err := json.Unmarshal(store.events[9].Payload, &toolResult); err != nil {
+		t.Fatalf("tool result payload = %v", err)
+	}
+	if toolResult.ExitCode == nil || *toolResult.ExitCode != 0 {
+		t.Fatalf("tool result exit code = %#v, want zero", toolResult.ExitCode)
 	}
 }
 
@@ -423,7 +430,7 @@ func TestRunCommandFailureReturnsCompleteToolHistory(t *testing.T) {
 	if len(activities) != 2 || activities[0].Phase != ActivityRunning || activities[1].Phase != ActivityFailed {
 		t.Fatalf("activities = %#v", activities)
 	}
-	if !hasEventType(store.events, events.CommandFailed) || !hasEventType(store.events, events.ToolResult) {
+	if !hasEventType(store.events, events.CommandFailed) || !hasEventType(store.events, events.ToolResultV2) {
 		t.Fatalf("events = %#v, want command and tool failures", store.events)
 	}
 }
@@ -477,7 +484,7 @@ func TestRunCommandToolDenialResumesWithoutExecution(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "marker")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("command executed after denial: %v", err)
 	}
-	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResult {
+	if len(store.events) != 10 || store.events[6].Type != events.ApprovalDenied || store.events[7].Type != events.ToolResultV2 {
 		t.Fatalf("events = %#v, want denied command lifecycle", store.events)
 	}
 }

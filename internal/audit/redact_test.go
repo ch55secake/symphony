@@ -96,6 +96,21 @@ func TestDefaultPolicyRedactsSecretEnvironmentAssignments(t *testing.T) {
 	}
 }
 
+func TestDefaultPolicyRedactsAuthAndAccessKeyOptions(t *testing.T) {
+	t.Parallel()
+	payload, redactions, err := DefaultPolicy().Redact([]string{"--auth=auth-secret", "--auth", "space-secret", "--access-key=access-secret", "safe"})
+	if err != nil {
+		t.Fatalf("Redact() error = %v", err)
+	}
+	var decoded []string
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(redactions) != 4 || decoded[0] != RedactedValue || decoded[1] != RedactedValue || decoded[2] != RedactedValue || decoded[3] != RedactedValue || decoded[4] != "safe" {
+		t.Fatalf("decoded = %#v, redactions = %#v", decoded, redactions)
+	}
+}
+
 func TestDefaultPolicyPreservesTokenUsageMetadata(t *testing.T) {
 	t.Parallel()
 	payload, redactions, err := DefaultPolicy().Redact(map[string]any{"input_tokens": 42})

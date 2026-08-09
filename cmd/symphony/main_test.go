@@ -77,7 +77,8 @@ type fakeProvider struct {
 }
 
 type cancelingProvider struct {
-	canceled chan struct{}
+	canceled    chan struct{}
+	startedPath string
 }
 
 type fakeReplayReader struct {
@@ -114,6 +115,9 @@ func (p *fakeProvider) Complete(_ context.Context, _ agent.CompletionRequest) (a
 func (p *cancelingProvider) Name() string { return "canceling" }
 
 func (p *cancelingProvider) Complete(ctx context.Context, _ agent.CompletionRequest) (agent.Completion, error) {
+	if p.startedPath != "" {
+		_ = os.WriteFile(p.startedPath, []byte("started"), 0o600)
+	}
 	<-ctx.Done()
 	close(p.canceled)
 	return agent.Completion{}, ctx.Err()
@@ -121,13 +125,16 @@ func (p *cancelingProvider) Complete(ctx context.Context, _ agent.CompletionRequ
 
 func TestOpenTUICtrlCCancelsWorkThenQuits(t *testing.T) {
 	root := t.TempDir()
-	provider := &cancelingProvider{canceled: make(chan struct{})}
+	provider := &cancelingProvider{canceled: make(chan struct{}), startedPath: filepath.Join(root, "provider.started")}
 	factory, store := testRuntime(t, root, provider, func(_ *workspace.Service) ([]agent.Tool, error) { return nil, nil })
 	executable := writeUIFixture(t, `#!/bin/sh
 printf '%s\n' '{"version":1,"type":"app.ready"}' >&4
 printf '%s\n' '{"version":1,"type":"chat.start"}' >&4
 printf '%s\n' '{"version":1,"type":"prompt.submit","payload":{"prompt":"wait"}}' >&4
-sleep 0.1
+while IFS= read -r state <&3; do
+  case "$state" in *'"status":"WORKING"'*) break ;; esac
+done
+while [ ! -f "$SYMPHONY_TEST_PROVIDER_STARTED" ]; do :; done
 printf '%s\n' '{"version":1,"type":"app.cancel"}' >&4
 while IFS= read -r state <&3; do
   case "$state" in *'"status":"Canceled"'*) break ;; esac
@@ -142,6 +149,7 @@ done
 	t.Setenv("PROVIDER", "openai")
 	t.Setenv("MODEL", "test-model")
 	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("SYMPHONY_TEST_PROVIDER_STARTED", provider.startedPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := runOpenTUI(ctx, factory, func(context.Context) error { return nil }, executable); err != nil {
