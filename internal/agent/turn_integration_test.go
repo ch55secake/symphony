@@ -56,7 +56,7 @@ func TestTurnPersistsModelLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if len(persisted) != 4 || persisted[1].Type != events.UserMessage || persisted[2].Type != events.ModelRequested || persisted[3].Type != events.ModelCompleted {
+	if len(persisted) != 4 || persisted[1].Type != events.UserMessage || persisted[2].Type != events.ModelRequested || persisted[3].Type != events.ModelCompletedV2 {
 		t.Fatalf("persisted events = %#v, want model lifecycle", persisted)
 	}
 }

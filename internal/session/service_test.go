@@ -16,6 +16,19 @@ type recordingStore struct {
 	expected []*uint64
 }
 
+func TestOutcomeContextIgnoresCancellationAndKeepsDeadline(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+	ctx, cancel := OutcomeContext(parent)
+	defer cancel()
+	if ctx.Err() != nil {
+		t.Fatalf("OutcomeContext() error = %v", ctx.Err())
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("OutcomeContext() has no deadline")
+	}
+}
+
 func (s *recordingStore) Append(_ context.Context, event events.Event, expectedRevision *uint64) (uint64, error) {
 	s.events = append(s.events, event)
 	if expectedRevision == nil {

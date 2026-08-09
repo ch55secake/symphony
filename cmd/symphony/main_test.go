@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ch55secake/symphony/internal/agent"
 	"github.com/ch55secake/symphony/internal/audit"
@@ -16,15 +19,53 @@ import (
 	"github.com/ch55secake/symphony/internal/providers/opencode"
 	"github.com/ch55secake/symphony/internal/session"
 	"github.com/ch55secake/symphony/internal/tui"
+	"github.com/ch55secake/symphony/internal/ui"
 	"github.com/ch55secake/symphony/internal/workspace"
 	"github.com/google/uuid"
 )
+
+func TestSendUIStateIncludesStructuredToolActivity(t *testing.T) {
+	var buffer bytes.Buffer
+	exitCode := 0
+	activities := []uiToolActivity{{AfterMessages: 1, Activity: agent.ToolActivity{ID: "call-1", Name: "run_command", Phase: agent.ActivityCompleted, Command: "go test ./...", ExitCode: &exitCode, OutputHidden: true}}}
+	if err := sendUIState(func(state ui.State) error { return ui.SendState(&buffer, state) }, config{provider: "openai", model: "test-model", workspace: "/workspace"}, []agent.Message{{Role: agent.RoleUser, Content: "test"}}, activities, nil, "READY"); err != nil {
+		t.Fatalf("sendUIState() error = %v", err)
+	}
+	message, err := ui.Read(bufio.NewReader(&buffer))
+	if err != nil {
+		t.Fatalf("read UI state: %v", err)
+	}
+	var state ui.State
+	if err := json.Unmarshal(message.Payload, &state); err != nil {
+		t.Fatalf("decode UI state: %v", err)
+	}
+	if len(state.Transcript) != 2 || state.Transcript[1].Tool == nil || state.Transcript[1].Tool.Command != "go test ./..." || state.Transcript[1].Tool.ExitCode == nil || *state.Transcript[1].Tool.ExitCode != 0 {
+		t.Fatalf("transcript = %#v", state.Transcript)
+	}
+}
+
+func TestUpsertUIActivityDoesNotOverwriteReusedProviderID(t *testing.T) {
+	activities := upsertUIActivity(nil, uiToolActivity{SourceID: "call-1", AfterMessages: 1, Activity: agent.ToolActivity{ID: "call-1", Phase: agent.ActivityRequested}})
+	activities = upsertUIActivity(activities, uiToolActivity{SourceID: "call-1", AfterMessages: 1, Activity: agent.ToolActivity{ID: "call-1", Phase: agent.ActivityCompleted}})
+	activities = upsertUIActivity(activities, uiToolActivity{SourceID: "call-1", AfterMessages: 3, Activity: agent.ToolActivity{ID: "call-1", Phase: agent.ActivityRequested}})
+	messages := []agent.Message{
+		{Role: agent.RoleAssistant, ToolCalls: []events.ModelToolCall{{ID: "call-1"}}},
+		{Role: agent.RoleAssistant, ToolCalls: []events.ModelToolCall{{ID: "call-1"}}},
+	}
+	activities = alignUIActivities(messages, activities)
+	if len(activities) != 2 || activities[0].Activity.ID == activities[1].Activity.ID || activities[0].AfterMessages != 1 || activities[1].AfterMessages != 2 {
+		t.Fatalf("activities = %#v", activities)
+	}
+}
 
 type memoryStore struct {
 	events []events.Event
 }
 
-func (s *memoryStore) Append(_ context.Context, event events.Event, _ *uint64) (uint64, error) {
+func (s *memoryStore) Append(ctx context.Context, event events.Event, _ *uint64) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	event.Sequence = uint64(len(s.events))
 	s.events = append(s.events, event)
 	return event.Sequence, nil
@@ -33,6 +74,10 @@ func (s *memoryStore) Append(_ context.Context, event events.Event, _ *uint64) (
 type fakeProvider struct {
 	completions []agent.Completion
 	err         error
+}
+
+type cancelingProvider struct {
+	canceled chan struct{}
 }
 
 type fakeReplayReader struct {
@@ -64,6 +109,52 @@ func (p *fakeProvider) Complete(_ context.Context, _ agent.CompletionRequest) (a
 	completion := p.completions[0]
 	p.completions = p.completions[1:]
 	return completion, nil
+}
+
+func (p *cancelingProvider) Name() string { return "canceling" }
+
+func (p *cancelingProvider) Complete(ctx context.Context, _ agent.CompletionRequest) (agent.Completion, error) {
+	<-ctx.Done()
+	close(p.canceled)
+	return agent.Completion{}, ctx.Err()
+}
+
+func TestOpenTUICtrlCCancelsWorkThenQuits(t *testing.T) {
+	root := t.TempDir()
+	provider := &cancelingProvider{canceled: make(chan struct{})}
+	factory, store := testRuntime(t, root, provider, func(_ *workspace.Service) ([]agent.Tool, error) { return nil, nil })
+	executable := writeUIFixture(t, `#!/bin/sh
+printf '%s\n' '{"version":1,"type":"app.ready"}' >&4
+printf '%s\n' '{"version":1,"type":"chat.start"}' >&4
+printf '%s\n' '{"version":1,"type":"prompt.submit","payload":{"prompt":"wait"}}' >&4
+sleep 0.1
+printf '%s\n' '{"version":1,"type":"app.cancel"}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"status":"Canceled"'*) break ;; esac
+done
+printf '%s\n' '{"version":1,"type":"app.cancel"}' >&4
+while IFS= read -r state <&3; do
+  case "$state" in *'"type":"app.shutdown"'*) exit 0 ;; esac
+done
+`)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PROVIDER", "openai")
+	t.Setenv("MODEL", "test-model")
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runOpenTUI(ctx, factory, func(context.Context) error { return nil }, executable); err != nil {
+		t.Fatalf("runOpenTUI() error = %v", err)
+	}
+	select {
+	case <-provider.canceled:
+	default:
+		t.Fatal("provider request was not canceled")
+	}
+	if !hasEvent(store.events, events.ModelFailed) || len(store.events) == 0 || store.events[len(store.events)-1].Type != events.SessionFinished {
+		t.Fatalf("events = %#v, want finished session", store.events)
+	}
 }
 
 func TestRunCompletesReadOnlySession(t *testing.T) {
@@ -347,6 +438,15 @@ func testRuntime(t *testing.T, root string, provider agent.Provider, setup func(
 		}
 		return &runtime{sessions: sessions, loop: loop, provider: provider, tools: definitions, close: func() error { return nil }}, nil
 	}, store
+}
+
+func writeUIFixture(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "symphony-ui-fixture")
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+		t.Fatalf("write UI fixture: %v", err)
+	}
+	return path
 }
 
 func hasEvent(events []events.Event, eventType events.Type) bool {

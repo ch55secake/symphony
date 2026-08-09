@@ -28,17 +28,38 @@ type State struct {
 	Workspace  string            `json:"workspace,omitempty"`
 	Status     string            `json:"status,omitempty"`
 	Transcript []TranscriptEntry `json:"transcript,omitempty"`
-	Pending    string            `json:"pending,omitempty"`
+	Approval   *Approval         `json:"approval,omitempty"`
 	Selection  string            `json:"selection,omitempty"`
 	Options    []string          `json:"options,omitempty"`
 }
 
+// Approval contains only the operator-safe details needed by the UI.
+type Approval struct {
+	Action  string `json:"action"`
+	Summary string `json:"summary"`
+	Hash    string `json:"hash"`
+}
+
 // TranscriptEntry is safe display metadata for a conversation message.
 type TranscriptEntry struct {
-	Role     string `json:"role"`
-	Label    string `json:"label"`
-	Content  string `json:"content,omitempty"`
-	Activity string `json:"activity,omitempty"`
+	Role    string        `json:"role"`
+	Label   string        `json:"label"`
+	Content string        `json:"content,omitempty"`
+	Tool    *ToolActivity `json:"tool,omitempty"`
+}
+
+// ToolActivity is a display-safe tool lifecycle update.
+type ToolActivity struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Phase            string `json:"phase"`
+	Target           string `json:"target,omitempty"`
+	Command          string `json:"command,omitempty"`
+	WorkingDirectory string `json:"working_directory,omitempty"`
+	Bytes            int    `json:"bytes,omitempty"`
+	Truncated        bool   `json:"truncated,omitempty"`
+	ExitCode         *int   `json:"exit_code,omitempty"`
+	OutputHidden     bool   `json:"output_hidden,omitempty"`
 }
 
 // SendState writes a display state without exposing backend capabilities.

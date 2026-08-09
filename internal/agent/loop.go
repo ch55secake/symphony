@@ -57,6 +57,7 @@ type PendingApproval struct {
 	approve      func(context.Context, *session.Handle, string) (ToolResult, error)
 	continuation CompletionRequest
 	round        int
+	activity     ToolActivity
 }
 
 // Loop runs provider turns and registered read-only tool calls until completion.
@@ -104,11 +105,21 @@ func (l *Loop) Run(ctx context.Context, handle *session.Handle, actor string, pr
 
 // RunWithApproval runs until final completion or an action needs approval.
 func (l *Loop) RunWithApproval(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest) (LoopResult, error) {
-	return l.run(ctx, handle, actor, provider, request, 0)
+	return l.RunWithApprovalObserved(ctx, handle, actor, provider, request, nil)
+}
+
+// RunWithApprovalObserved runs until completion or approval while reporting safe tool activity.
+func (l *Loop) RunWithApprovalObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, observer ActivityObserver) (LoopResult, error) {
+	return l.run(ctx, handle, actor, provider, request, 0, observer)
 }
 
 // Approve persists approval, executes the staged action, and resumes the loop.
 func (l *Loop) Approve(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval) (LoopResult, error) {
+	return l.ApproveObserved(ctx, handle, actor, provider, pending, nil)
+}
+
+// ApproveObserved approves an action while reporting safe tool activity.
+func (l *Loop) ApproveObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, observer ActivityObserver) (LoopResult, error) {
 	if err := pending.begin(handle); err != nil {
 		return LoopResult{}, err
 	}
@@ -120,20 +131,41 @@ func (l *Loop) Approve(ctx context.Context, handle *session.Handle, actor string
 		return LoopResult{}, fmt.Errorf("record approval grant: %w", err)
 	}
 	pending.consume()
+	pending.activity.Phase = ActivityRunning
+	emitActivity(observer, pending.activity)
 	result, err := pending.approve(ctx, handle, actor)
-	if err != nil {
-		return LoopResult{}, fmt.Errorf("execute approved action: %w", err)
-	}
 	result.CallID = pending.ToolCallID
 	result.Name = pending.Action
-	if err := l.turns.RecordToolResult(ctx, handle, pending.Action, result); err != nil {
+	if err != nil {
+		if result.Content == "" {
+			result.Content = pending.Action + " failed"
+			result.Bytes = len(result.Content)
+			result.Hash = events.Hash([]byte(result.Content))
+		}
+		result.IsError = true
+		emitActivity(observer, completeActivity(pending.activity, result, ActivityFailed))
+		recordErr := l.recordToolResult(ctx, handle, pending.Action, result)
+		messages := append([]Message(nil), pending.continuation.Messages...)
+		messages = append(messages, Message{Role: RoleUser, ToolResults: []ToolResult{result}})
+		if recordErr != nil {
+			return LoopResult{Messages: messages}, errors.Join(fmt.Errorf("execute approved action: %w", err), fmt.Errorf("record failed tool result: %w", recordErr))
+		}
+		return LoopResult{Messages: messages}, fmt.Errorf("execute approved action: %w", err)
+	}
+	emitActivity(observer, completeActivity(pending.activity, result, ActivityCompleted))
+	if err := l.recordToolResult(ctx, handle, pending.Action, result); err != nil {
 		return LoopResult{}, fmt.Errorf("record approved tool result: %w", err)
 	}
-	return l.resume(ctx, handle, actor, provider, pending, result)
+	return l.resume(ctx, handle, actor, provider, pending, result, observer)
 }
 
 // Deny persists denial and resumes the loop with an error tool result.
 func (l *Loop) Deny(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, reasonCode string) (LoopResult, error) {
+	return l.DenyObserved(ctx, handle, actor, provider, pending, reasonCode, nil)
+}
+
+// DenyObserved denies an action while reporting safe tool activity.
+func (l *Loop) DenyObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, reasonCode string, observer ActivityObserver) (LoopResult, error) {
 	if err := pending.begin(handle); err != nil {
 		return LoopResult{}, err
 	}
@@ -157,18 +189,23 @@ func (l *Loop) Deny(ctx context.Context, handle *session.Handle, actor string, p
 		Bytes:   len("action denied"),
 		Hash:    events.Hash([]byte("action denied")),
 	}
-	if err := l.turns.RecordToolResult(ctx, handle, pending.Action, result); err != nil {
+	emitActivity(observer, completeActivity(pending.activity, result, ActivityDenied))
+	if err := l.recordToolResult(ctx, handle, pending.Action, result); err != nil {
 		return LoopResult{}, fmt.Errorf("record denied tool result: %w", err)
 	}
-	return l.resume(ctx, handle, actor, provider, pending, result)
+	return l.resume(ctx, handle, actor, provider, pending, result, observer)
 }
 
-func (l *Loop) resume(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, result ToolResult) (LoopResult, error) {
+func (l *Loop) resume(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, result ToolResult, observer ActivityObserver) (LoopResult, error) {
 	pending.continuation.Messages = append(pending.continuation.Messages, Message{Role: RoleUser, ToolResults: []ToolResult{result}})
-	return l.run(ctx, handle, actor, provider, pending.continuation, pending.round)
+	resumed, err := l.run(ctx, handle, actor, provider, pending.continuation, pending.round, observer)
+	if err != nil && len(resumed.Messages) == 0 {
+		resumed.Messages = append([]Message(nil), pending.continuation.Messages...)
+	}
+	return resumed, err
 }
 
-func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, startRound int) (LoopResult, error) {
+func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, startRound int, observer ActivityObserver) (LoopResult, error) {
 	current := request
 	for round := startRound; ; round++ {
 		var completion Completion
@@ -179,7 +216,7 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 			completion, err = l.turns.Continue(ctx, handle, actor, provider, current)
 		}
 		if err != nil {
-			return LoopResult{}, err
+			return LoopResult{Messages: append([]Message(nil), current.Messages...)}, err
 		}
 		if len(completion.ToolCalls) == 0 {
 			messages := append([]Message(nil), current.Messages...)
@@ -192,7 +229,10 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 		if round >= l.maxToolRounds {
 			return LoopResult{}, ErrMaxToolRounds
 		}
-		if pending, ok, err := l.requestApproval(ctx, handle, actor, current, completion, round); err != nil {
+		for _, call := range completion.ToolCalls {
+			emitActivity(observer, ProjectToolActivity(call, ActivityRequested))
+		}
+		if pending, ok, err := l.requestApproval(ctx, handle, actor, current, completion, round, observer); err != nil {
 			return LoopResult{}, err
 		} else if ok {
 			return LoopResult{Pending: pending, Messages: append([]Message(nil), pending.continuation.Messages...)}, nil
@@ -200,10 +240,13 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 
 		results := make([]ToolResult, 0, len(completion.ToolCalls))
 		for _, call := range completion.ToolCalls {
+			activity := ProjectToolActivity(call, ActivityRunning)
+			emitActivity(observer, activity)
 			tool, exists := l.tools[call.Name]
 			if !exists {
 				result := failedToolResult(call, "unknown tool")
-				if err := l.turns.RecordToolResult(ctx, handle, call.Name, result); err != nil {
+				emitActivity(observer, completeActivity(activity, result, ActivityFailed))
+				if err := l.recordToolResult(ctx, handle, call.Name, result); err != nil {
 					return LoopResult{}, fmt.Errorf("record unknown tool result: %w", err)
 				}
 				return LoopResult{}, fmt.Errorf("%w: %s", ErrUnknownTool, call.Name)
@@ -211,7 +254,12 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 			result, toolErr := tool.Execute(ctx, handle, call.Name, call.Arguments)
 			result.CallID = call.ID
 			result.Name = call.Name
-			if err := l.turns.RecordToolResult(ctx, handle, call.Name, result); err != nil {
+			phase := ActivityCompleted
+			if toolErr != nil {
+				phase = ActivityFailed
+			}
+			emitActivity(observer, completeActivity(activity, result, phase))
+			if err := l.recordToolResult(ctx, handle, call.Name, result); err != nil {
 				return LoopResult{}, fmt.Errorf("record tool result: %w", err)
 			}
 			if toolErr != nil {
@@ -226,7 +274,13 @@ func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, pr
 	}
 }
 
-func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, actor string, request CompletionRequest, completion Completion, round int) (*PendingApproval, bool, error) {
+func (l *Loop) recordToolResult(ctx context.Context, handle *session.Handle, actor string, result ToolResult) error {
+	outcomeCtx, cancelOutcome := session.OutcomeContext(ctx)
+	defer cancelOutcome()
+	return l.turns.RecordToolResult(outcomeCtx, handle, actor, result)
+}
+
+func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, actor string, request CompletionRequest, completion Completion, round int, observer ActivityObserver) (*PendingApproval, bool, error) {
 	for approvalIndex, call := range completion.ToolCalls {
 		tool, exists := l.tools[call.Name]
 		if !exists {
@@ -238,10 +292,13 @@ func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, acto
 		}
 		pending, err := approvalTool.RequestApproval(ctx, handle, actor, call.Arguments)
 		if err != nil {
+			emitActivity(observer, ProjectToolActivity(call, ActivityFailed))
 			return nil, false, fmt.Errorf("request approval for tool %q: %w", call.Name, err)
 		}
 		pending.ToolCallID = call.ID
 		pending.sessionID = handle.SessionID
+		pending.activity = ProjectToolActivity(call, ActivityAwaitingApproval)
+		emitActivity(observer, pending.activity)
 		pending.continuation = request
 		pending.continuation.Messages = append(pending.continuation.Messages, Message{Role: RoleAssistant, Content: completion.Content, ToolCalls: completion.ToolCalls})
 		results := make([]ToolResult, 0, len(completion.ToolCalls)-1)
@@ -249,10 +306,13 @@ func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, acto
 			if index == approvalIndex {
 				continue
 			}
+			activity := ProjectToolActivity(sibling, ActivityRunning)
+			emitActivity(observer, activity)
 			siblingTool, exists := l.tools[sibling.Name]
 			if !exists {
 				result := failedToolResult(sibling, "unknown tool")
-				if err := l.turns.RecordToolResult(ctx, handle, sibling.Name, result); err != nil {
+				emitActivity(observer, completeActivity(activity, result, ActivityFailed))
+				if err := l.recordToolResult(ctx, handle, sibling.Name, result); err != nil {
 					return nil, false, fmt.Errorf("record unknown tool result: %w", err)
 				}
 				results = append(results, result)
@@ -260,7 +320,8 @@ func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, acto
 			}
 			if _, needsApproval := siblingTool.(ApprovalTool); needsApproval {
 				result := failedToolResult(sibling, "action deferred until the current approval is resolved")
-				if err := l.turns.RecordToolResult(ctx, handle, sibling.Name, result); err != nil {
+				emitActivity(observer, completeActivity(activity, result, ActivityFailed))
+				if err := l.recordToolResult(ctx, handle, sibling.Name, result); err != nil {
 					return nil, false, fmt.Errorf("record deferred tool result: %w", err)
 				}
 				results = append(results, result)
@@ -268,7 +329,12 @@ func (l *Loop) requestApproval(ctx context.Context, handle *session.Handle, acto
 			}
 			result, toolErr := siblingTool.Execute(ctx, handle, sibling.Name, sibling.Arguments)
 			result.CallID, result.Name = sibling.ID, sibling.Name
-			if err := l.turns.RecordToolResult(ctx, handle, sibling.Name, result); err != nil {
+			phase := ActivityCompleted
+			if toolErr != nil {
+				phase = ActivityFailed
+			}
+			emitActivity(observer, completeActivity(activity, result, phase))
+			if err := l.recordToolResult(ctx, handle, sibling.Name, result); err != nil {
 				return nil, false, fmt.Errorf("record tool result: %w", err)
 			}
 			if toolErr != nil {
@@ -316,6 +382,16 @@ func (p *PendingApproval) release() {
 func (p *PendingApproval) consume() {
 	p.used = true
 	p.mu.Unlock()
+}
+
+// Used reports whether the approval decision has already been persisted.
+func (p *PendingApproval) Used() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.used
 }
 
 // ReadFileTool exposes the audited workspace read service to a provider.
@@ -480,7 +556,9 @@ func (t *RunCommandTool) RequestApproval(ctx context.Context, handle *session.Ha
 			}
 			result, err := t.workspace.ExecuteCommand(ctx, handle, actor, request, command)
 			if err != nil {
-				return ToolResult{}, err
+				toolResult := commandToolResult(result)
+				toolResult.IsError = true
+				return toolResult, err
 			}
 			return commandToolResult(result), nil
 		},
@@ -498,11 +576,13 @@ func commandToolResult(result workspace.CommandResult) ToolResult {
 	if content == "" {
 		content = fmt.Sprintf("command completed with exit code %d", result.ExitCode)
 	}
+	exitCode := result.ExitCode
 	return ToolResult{
 		Content:   content,
 		Bytes:     len(result.Stdout) + len(result.Stderr),
 		Hash:      events.Hash([]byte(content)),
 		Truncated: result.Truncated,
+		ExitCode:  &exitCode,
 	}
 }
 

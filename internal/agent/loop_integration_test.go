@@ -88,7 +88,7 @@ func TestLoopPersistsReadOnlyToolSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if len(persisted) != 9 || persisted[6].Type != events.ToolResult || persisted[7].Type != events.ModelRequested || persisted[8].Type != events.ModelCompleted {
+	if len(persisted) != 9 || persisted[6].Type != events.ToolResult || persisted[7].Type != events.ModelRequested || persisted[8].Type != events.ModelCompletedV2 {
 		t.Fatalf("persisted events = %#v, want complete read-only tool loop", persisted)
 	}
 }

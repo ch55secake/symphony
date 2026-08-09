@@ -204,7 +204,9 @@ func commandFailureOutcome(request *CommandRequest, code string, exitCode int, s
 
 func (s *Service) persistCommandOutcome(ctx context.Context, handle *session.Handle, actor string, request *CommandRequest) (CommandResult, error) {
 	outcome := request.pending
-	if err := s.sessions.Record(ctx, handle, outcome.event, actor, outcome.payload); err != nil {
+	outcomeCtx, cancelOutcome := session.OutcomeContext(ctx)
+	defer cancelOutcome()
+	if err := s.sessions.Record(outcomeCtx, handle, outcome.event, actor, outcome.payload); err != nil {
 		if outcome.cause != nil {
 			return outcome.result, errors.Join(fmt.Errorf("run workspace command: %w", outcome.cause), fmt.Errorf("record command outcome: %w", err))
 		}

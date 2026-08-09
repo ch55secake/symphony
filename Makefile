@@ -24,7 +24,8 @@ help: ## Show available commands.
 ui-install: ## Install pinned OpenTUI dependencies.
 	bun install --cwd ui --frozen-lockfile
 
-ui-test: ui-install ## Typecheck the OpenTUI application.
+ui-test: ui-install ## Test and typecheck the OpenTUI application.
+	bun run --cwd ui test
 	bun run --cwd ui typecheck
 
 ui-build: ui-install ## Compile the standalone OpenTUI application.

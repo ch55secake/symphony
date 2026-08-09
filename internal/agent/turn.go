@@ -37,6 +37,7 @@ type ToolResult struct {
 	Bytes     int    `json:"bytes"`
 	Hash      string `json:"hash"`
 	Truncated bool   `json:"truncated"`
+	ExitCode  *int   `json:"exit_code,omitempty"`
 }
 
 // ToolDefinition describes a callable tool exposed to a model.
@@ -126,8 +127,10 @@ func (s *Service) run(ctx context.Context, handle *session.Handle, actor string,
 	}
 
 	completion, err := provider.Complete(ctx, request)
+	outcomeCtx, cancelOutcome := session.OutcomeContext(ctx)
+	defer cancelOutcome()
 	if err != nil {
-		outcomeErr := s.sessions.Record(ctx, handle, events.ModelFailed, provider.Name(), events.ModelFailedPayload{
+		outcomeErr := s.sessions.Record(outcomeCtx, handle, events.ModelFailed, provider.Name(), events.ModelFailedPayload{
 			Provider: provider.Name(),
 			Model:    request.Model,
 			Code:     failureCode(ctx, err),
@@ -137,11 +140,15 @@ func (s *Service) run(ctx context.Context, handle *session.Handle, actor string,
 		}
 		return Completion{}, fmt.Errorf("complete model turn: %w", err)
 	}
-	if err := s.sessions.Record(ctx, handle, events.ModelCompleted, provider.Name(), events.ModelCompletedPayload{
+	toolCalls := make([]events.ModelToolCallSummary, 0, len(completion.ToolCalls))
+	for _, call := range completion.ToolCalls {
+		toolCalls = append(toolCalls, events.ModelToolCallSummary{ID: call.ID, Name: call.Name, ArgumentsHash: events.Hash(call.Arguments)})
+	}
+	if err := s.sessions.Record(outcomeCtx, handle, events.ModelCompletedV2, provider.Name(), events.ModelCompletedV2Payload{
 		Provider:     provider.Name(),
 		Model:        request.Model,
 		Content:      completion.Content,
-		ToolCalls:    completion.ToolCalls,
+		ToolCalls:    toolCalls,
 		StopReason:   completion.StopReason,
 		InputTokens:  completion.InputTokens,
 		OutputTokens: completion.OutputTokens,

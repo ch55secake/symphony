@@ -7,7 +7,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
+	"syscall"
+	"time"
 )
+
+const shutdownGracePeriod = 750 * time.Millisecond
+const shutdownRequestTimeout = 100 * time.Millisecond
 
 // Child is an OpenTUI process connected over private file descriptors.
 type Child struct {
@@ -15,6 +21,9 @@ type Child struct {
 	Reader  *bufio.Reader
 	reader  io.Closer
 	Writer  io.WriteCloser
+	done    chan struct{}
+	waitErr error
+	close   sync.Once
 }
 
 // Start launches executable without using the terminal's standard streams for RPC.
@@ -30,6 +39,13 @@ func Start(ctx context.Context, executable string) (*Child, error) {
 		return nil, fmt.Errorf("create UI output pipe: %w", err)
 	}
 	command := exec.CommandContext(ctx, executable)
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		return command.Process.Signal(syscall.SIGTERM)
+	}
+	command.WaitDelay = shutdownGracePeriod
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
@@ -44,25 +60,56 @@ func Start(ctx context.Context, executable string) (*Child, error) {
 	}
 	_ = toUIReader.Close()
 	_ = fromUIWriter.Close()
-	return &Child{Command: command, Reader: bufio.NewReader(fromUIReader), reader: fromUIReader, Writer: toUIWriter}, nil
+	child := &Child{Command: command, Reader: bufio.NewReader(fromUIReader), reader: fromUIReader, Writer: toUIWriter, done: make(chan struct{})}
+	go func() {
+		child.waitErr = command.Wait()
+		close(child.done)
+	}()
+	return child, nil
 }
 
-// Close terminates the UI process and its private protocol pipes.
+// Close asks the UI to restore the terminal before escalating to process signals.
 func (c *Child) Close() error {
 	if c == nil {
 		return nil
 	}
-	if c.Writer != nil {
-		_ = c.Writer.Close()
+	c.close.Do(func() {
+		if c.Writer != nil {
+			requestDone := make(chan struct{})
+			go func() {
+				_ = Write(c.Writer, Message{Type: "app.shutdown"})
+				_ = c.Writer.Close()
+				close(requestDone)
+			}()
+			select {
+			case <-requestDone:
+			case <-time.After(shutdownRequestTimeout):
+				_ = c.Writer.Close()
+				<-requestDone
+			}
+		}
+		if !c.wait(shutdownGracePeriod) && c.Command != nil && c.Command.Process != nil {
+			_ = c.Command.Process.Signal(syscall.SIGTERM)
+			if !c.wait(shutdownGracePeriod) {
+				_ = c.Command.Process.Kill()
+				<-c.done
+			}
+		}
+		if c.reader != nil {
+			_ = c.reader.Close()
+		}
+	})
+	return c.waitErr
+}
+
+func (c *Child) wait(timeout time.Duration) bool {
+	if c.done == nil {
+		return true
 	}
-	if c.reader != nil {
-		_ = c.reader.Close()
+	select {
+	case <-c.done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
-	if c.Command != nil && c.Command.Process != nil {
-		_ = c.Command.Process.Kill()
-	}
-	if c.Command != nil {
-		return c.Command.Wait()
-	}
-	return nil
 }

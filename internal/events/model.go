@@ -34,6 +34,24 @@ type ModelCompletedPayload struct {
 	OutputTokens int             `json:"output_tokens,omitempty"`
 }
 
+// ModelToolCallSummary records tool-call identity without persisting raw arguments.
+type ModelToolCallSummary struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	ArgumentsHash string `json:"arguments_hash"`
+}
+
+// ModelCompletedV2Payload records a model response with safe tool-call summaries.
+type ModelCompletedV2Payload struct {
+	Provider     string                 `json:"provider"`
+	Model        string                 `json:"model"`
+	Content      string                 `json:"content"`
+	ToolCalls    []ModelToolCallSummary `json:"tool_calls,omitempty"`
+	StopReason   string                 `json:"stop_reason"`
+	InputTokens  int                    `json:"input_tokens,omitempty"`
+	OutputTokens int                    `json:"output_tokens,omitempty"`
+}
+
 // ModelFailedPayload records safe metadata about a failed model request.
 type ModelFailedPayload struct {
 	Provider string `json:"provider"`

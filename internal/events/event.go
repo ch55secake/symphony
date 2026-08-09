@@ -34,6 +34,7 @@ const (
 	UserMessage          Type = "user.message"
 	ModelRequested       Type = "model.requested"
 	ModelCompleted       Type = "model.completed"
+	ModelCompletedV2     Type = "model.completed.v2"
 	ModelFailed          Type = "model.failed"
 	ModelListRequested   Type = "model.list.requested"
 	ModelListCompleted   Type = "model.list.completed"
