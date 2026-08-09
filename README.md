@@ -205,7 +205,8 @@ While chat is open, these commands manage the active session:
 - `/model` lists models for the active provider; `/model NAME` selects one directly.
 - `/theme default`, `/theme contrast`, and `/theme mono` persist a theme for the next session.
 - `/allow-all` enables automatic approval for workspace writes and commands for the current session. `/allow-all off` restores prompts. Every action remains recorded and constrained to the workspace.
-- `/settings` displays the current connection, theme, and approval mode.
+- `/settings` opens a keyboard-driven dashboard for changing the model, theme, and
+  session approval mode while displaying the current provider and workspace.
 - `/help` lists available commands.
 
 The OpenTUI migration path requires a saved connection. Use the legacy `/connect` flow

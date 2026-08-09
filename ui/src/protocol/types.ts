@@ -30,6 +30,7 @@ type SessionDetails = {
   theme?: string
   workspace: string
   status?: string
+  allow_all?: boolean
 }
 
 export type UIState =
