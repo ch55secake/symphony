@@ -1,4 +1,5 @@
 import type { Command } from "../commands/registry"
+import type { TreeSitterClient } from "@opentui/core"
 import { ApprovalPanel } from "../components/ApprovalPanel"
 import { Composer } from "../components/Composer"
 import { Conversation } from "../components/Conversation"
@@ -20,6 +21,7 @@ type Props = {
   suggestions: Command[]
   selected: number
   mode: Mode
+  treeSitterClient?: TreeSitterClient
   theme: Theme
   width: number
   height: number
@@ -35,7 +37,7 @@ export function ChatScreen(props: Props) {
   const visibleSuggestions = tiny ? [] : props.suggestions
   return <box flexDirection="column" padding={compact ? 0 : 1} gap={1} style={{ width: props.width, height: props.height }}>
     {!tiny && <Header provider={props.provider} model={props.model} workspace={props.workspace} mode={props.mode} theme={props.theme} compact={compact} />}
-    <Conversation entries={props.transcript} theme={props.theme} />
+    <Conversation entries={props.transcript} theme={props.theme} treeSitterClient={props.treeSitterClient} />
     {props.approval
       ? <ApprovalPanel approval={props.approval} theme={props.theme} compact={compact} />
       : busy

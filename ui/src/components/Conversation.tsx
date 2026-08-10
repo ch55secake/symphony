@@ -1,10 +1,11 @@
-import type { ScrollBoxRenderable } from "@opentui/core"
+import type { ScrollBoxRenderable, TreeSitterClient } from "@opentui/core"
 import { useEffect, useRef } from "react"
 import type { TranscriptEntry } from "../protocol/types"
 import type { Theme } from "../theme/tokens"
+import { MarkdownMessage } from "./MarkdownMessage"
 import { ToolActivityRow } from "./ToolActivityRow"
 
-export function Conversation({ entries, theme }: { entries: TranscriptEntry[]; theme: Theme }) {
+export function Conversation({ entries, theme, treeSitterClient }: { entries: TranscriptEntry[]; theme: Theme; treeSitterClient?: TreeSitterClient }) {
   const scrollbox = useRef<ScrollBoxRenderable>(null)
   useEffect(() => {
     const frame = requestAnimationFrame(() => scrollbox.current?.scrollTo({ y: scrollbox.current.scrollHeight, x: 0 }))
@@ -21,7 +22,7 @@ export function Conversation({ entries, theme }: { entries: TranscriptEntry[]; t
       const user = entry.role === "user"
       return <box key={index} flexDirection="column" paddingLeft={user ? 0 : 2} paddingRight={1} marginBottom={1}>
         <text fg={user ? theme.accent : theme.model}>{user ? "YOU" : entry.label.toUpperCase()}</text>
-        <text fg={user ? theme.muted : theme.text}>{entry.content}</text>
+        {user ? <text fg={theme.muted}>{entry.content}</text> : <MarkdownMessage content={entry.content ?? ""} theme={theme} treeSitterClient={treeSitterClient} />}
       </box>
     })}
   </scrollbox>
