@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { TestRendererSetup } from "@opentui/core/testing"
+import { MockTreeSitterClient } from "@opentui/core/testing"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { commands } from "../commands/registry"
@@ -9,12 +10,18 @@ import { getTheme } from "../theme/tokens"
 import { ChatScreen } from "./ChatScreen"
 
 let setup: TestRendererSetup | undefined
+let treeSitterClient: MockTreeSitterClient | undefined
 afterEach(async () => {
-  await act(async () => setup?.renderer.destroy())
+  await act(async () => {
+    setup?.renderer.destroy()
+    await treeSitterClient?.destroy()
+  })
+  treeSitterClient = undefined
 })
 
 describe("ChatScreen", () => {
   test("keeps every command visible above a populated transcript", async () => {
+    treeSitterClient = new MockTreeSitterClient({ autoResolveTimeout: 0 })
     await act(async () => {
       setup = await testRender(<ChatScreen
       provider="openai"
@@ -22,6 +29,7 @@ describe("ChatScreen", () => {
       workspace="/workspace"
       status="READY"
       mode="build"
+      treeSitterClient={treeSitterClient}
       transcript={[
         { role: "user", label: "You", content: "Please inspect the project" },
         { role: "assistant", label: "test-model", content: "I inspected several files and can continue with the requested work." },
@@ -70,6 +78,42 @@ describe("ChatScreen", () => {
     expect(frame).toContain("Running")
     expect(frame).toContain("go test ./...")
     expect(frame).toContain("output hidden")
+  })
+
+  test("renders assistant Markdown while preserving user text", async () => {
+    treeSitterClient = new MockTreeSitterClient({ autoResolveTimeout: 0 })
+    await act(async () => {
+      setup = await testRender(<ChatScreen
+      provider="openai"
+      model="test-model"
+      workspace="/workspace"
+      status="READY"
+      mode="build"
+      treeSitterClient={treeSitterClient}
+      transcript={[
+        { role: "user", label: "You", content: "Use **literal** Markdown here" },
+        { role: "assistant", label: "test-model", content: "# Summary\n\n**Implemented** the change.\n\n- Added `MarkdownMessage`\n- Verified the result\n\n```typescript\nconst total = 1 + 2\n```" },
+      ]}
+      value=""
+      onChange={() => {}}
+      onSubmit={() => {}}
+      suggestions={[]}
+      selected={0}
+      theme={getTheme()}
+      width={100}
+      height={30}
+      />, { width: 100, height: 30 })
+    })
+    await setup!.flush()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await setup!.renderOnce()
+    await setup!.flush()
+    const frame = setup!.captureCharFrame()
+    expect(frame).toContain("Summary")
+    expect(frame).toContain("Implemented")
+    expect(frame).toContain("MarkdownMessage")
+    expect(frame).toContain("const total = 1 + 2")
+    expect(frame).toContain("Use **literal** Markdown here")
   })
 
   test("keeps approval controls separate from the requested command", async () => {
