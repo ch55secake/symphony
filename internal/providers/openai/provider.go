@@ -2,11 +2,13 @@
 package openai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -98,6 +100,12 @@ type responsesRequest struct {
 	Input        []any          `json:"input"`
 	Tools        []functionTool `json:"tools,omitempty"`
 	Store        bool           `json:"store"`
+	Stream       bool           `json:"stream,omitempty"`
+	Reasoning    *reasoning     `json:"reasoning,omitempty"`
+}
+
+type reasoning struct {
+	Summary string `json:"summary,omitempty"`
 }
 
 type inputMessage struct {
@@ -148,7 +156,11 @@ func toRequest(request agent.CompletionRequest) responsesRequest {
 			Parameters:  tool.InputSchema,
 		})
 	}
-	return responsesRequest{Model: request.Model, Instructions: request.Instructions, Input: input, Tools: tools, Store: false}
+	var reasoningConfig *reasoning
+	if request.ReasoningSummaries {
+		reasoningConfig = &reasoning{Summary: "auto"}
+	}
+	return responsesRequest{Model: request.Model, Instructions: request.Instructions, Input: input, Tools: tools, Store: false, Reasoning: reasoningConfig}
 }
 
 type responsesResponse struct {
@@ -209,4 +221,123 @@ func toCompletion(response responsesResponse) (agent.Completion, error) {
 		InputTokens:  response.Usage.InputTokens,
 		OutputTokens: response.Usage.OutputTokens,
 	}, nil
+}
+
+// CompleteStream streams OpenAI Responses output and assembles the same final completion.
+func (p *Provider) CompleteStream(ctx context.Context, request agent.CompletionRequest, observer agent.StreamObserver) (agent.Completion, error) {
+	payload := toRequest(request)
+	payload.Stream = true
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("marshal OpenAI streaming request: %w", err)
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/responses", bytes.NewReader(body))
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("create OpenAI streaming request: %w", err)
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpRequest.Header.Set("Content-Type", "application/json")
+	response, err := p.httpClient.Do(httpRequest)
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("send OpenAI streaming request: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return agent.Completion{}, &Error{StatusCode: response.StatusCode, Detail: providers.ErrorDetail(response.Body, p.apiKey)}
+	}
+
+	reader := bufio.NewReader(response.Body)
+	var assembled agent.Completion
+	var content strings.Builder
+	toolArgs := make(map[string]*strings.Builder)
+	toolNames := make(map[string]string)
+	toolOrder := make([]string, 0)
+	for {
+		event, readErr := providers.ReadSSE(reader)
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return agent.Completion{}, fmt.Errorf("read OpenAI stream: %w", readErr)
+		}
+		if string(event.Data) == "[DONE]" {
+			break
+		}
+		var envelope struct {
+			Type     string            `json:"type"`
+			Delta    string            `json:"delta"`
+			Response responsesResponse `json:"response"`
+			Item     json.RawMessage   `json:"item"`
+			ItemID   string            `json:"item_id"`
+			CallID   string            `json:"call_id"`
+			Name     string            `json:"name"`
+		}
+		if err := providers.DecodeSSE(event, &envelope); err != nil {
+			return agent.Completion{}, err
+		}
+		switch envelope.Type {
+		case "response.output_text.delta":
+			content.WriteString(envelope.Delta)
+			emitStream(observer, agent.StreamEvent{Kind: agent.StreamText, Text: envelope.Delta})
+		case "response.reasoning_summary_text.delta", "response.reasoning_summary_part.delta":
+			emitStream(observer, agent.StreamEvent{Kind: agent.StreamReasoning, Text: envelope.Delta})
+		case "response.output_item.added":
+			var item struct {
+				Type   string `json:"type"`
+				ID     string `json:"id"`
+				CallID string `json:"call_id"`
+				Name   string `json:"name"`
+			}
+			if len(envelope.Item) > 0 && json.Unmarshal(envelope.Item, &item) == nil && item.Type == "function_call" {
+				id := item.CallID
+				if id == "" { id = item.ID }
+				builder := &strings.Builder{}
+				toolArgs[id] = builder
+				toolNames[id] = item.Name
+				toolOrder = append(toolOrder, id)
+				if item.ID != "" {
+					toolArgs[item.ID] = builder
+					toolNames[item.ID] = item.Name
+				}
+			}
+		case "response.function_call_arguments.delta":
+			id := envelope.ItemID
+			if id == "" {
+				id = envelope.CallID
+			}
+			if builder := toolArgs[id]; builder != nil {
+				builder.WriteString(envelope.Delta)
+			}
+		case "response.completed":
+			assembled, err = toCompletion(envelope.Response)
+			if err != nil {
+				return agent.Completion{}, err
+			}
+		case "error":
+			return agent.Completion{}, errors.New("OpenAI stream returned an error")
+		}
+	}
+	if assembled.Content == "" && content.Len() > 0 {
+		assembled.Content = content.String()
+	}
+	if len(assembled.ToolCalls) == 0 {
+		for _, id := range toolOrder {
+			builder := toolArgs[id]
+			arguments := []byte(builder.String())
+			if len(arguments) == 0 {
+				arguments = []byte(`{}`)
+			}
+			if !json.Valid(arguments) {
+				return agent.Completion{}, errors.New("OpenAI streamed function call arguments are not valid JSON")
+			}
+			assembled.ToolCalls = append(assembled.ToolCalls, events.ModelToolCall{ID: id, Name: toolNames[id], Arguments: arguments})
+		}
+	}
+	return assembled, nil
+}
+
+func emitStream(observer agent.StreamObserver, event agent.StreamEvent) {
+	if observer != nil && event.Text != "" {
+		observer(event)
+	}
 }

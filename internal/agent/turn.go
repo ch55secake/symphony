@@ -49,10 +49,11 @@ type ToolDefinition struct {
 
 // CompletionRequest is a provider-neutral model completion request.
 type CompletionRequest struct {
-	Model        string           `json:"model"`
-	Instructions string           `json:"instructions,omitempty"`
-	Messages     []Message        `json:"messages"`
-	Tools        []ToolDefinition `json:"tools,omitempty"`
+	Model              string           `json:"model"`
+	Instructions       string           `json:"instructions,omitempty"`
+	Messages           []Message        `json:"messages"`
+	Tools              []ToolDefinition `json:"tools,omitempty"`
+	ReasoningSummaries bool             `json:"reasoning_summaries,omitempty"`
 }
 
 // Completion is a provider-neutral model completion response.
@@ -70,6 +71,30 @@ type Provider interface {
 	Complete(context.Context, CompletionRequest) (Completion, error)
 }
 
+// StreamEvent is a provider-neutral live update. It is never persisted.
+type StreamEvent struct {
+	Kind StreamEventKind
+	Text string
+}
+
+// StreamEventKind identifies the display-safe portion of a live model update.
+type StreamEventKind string
+
+const (
+	StreamStart     StreamEventKind = "start"
+	StreamText      StreamEventKind = "text"
+	StreamReasoning StreamEventKind = "reasoning"
+)
+
+// StreamObserver receives provider output in generation order.
+type StreamObserver func(StreamEvent)
+
+// StreamingProvider optionally exposes incremental model output.
+type StreamingProvider interface {
+	Provider
+	CompleteStream(context.Context, CompletionRequest, StreamObserver) (Completion, error)
+}
+
 // Service records turn state before and after provider side effects.
 type Service struct {
 	sessions *session.Service
@@ -84,15 +109,15 @@ func New(sessions *session.Service) (*Service, error) {
 
 // Run records user input, model intent, and the provider outcome for one turn.
 func (s *Service) Run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest) (Completion, error) {
-	return s.run(ctx, handle, actor, provider, request, true)
+	return s.run(ctx, handle, actor, provider, request, true, nil)
 }
 
 // Continue records a follow-up model turn without duplicating prior user messages.
 func (s *Service) Continue(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest) (Completion, error) {
-	return s.run(ctx, handle, actor, provider, request, false)
+	return s.run(ctx, handle, actor, provider, request, false, nil)
 }
 
-func (s *Service) run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, recordUserMessages bool) (Completion, error) {
+func (s *Service) run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, recordUserMessages bool, observer StreamObserver) (Completion, error) {
 	if provider == nil {
 		return Completion{}, fmt.Errorf("model provider is required")
 	}
@@ -127,7 +152,7 @@ func (s *Service) run(ctx context.Context, handle *session.Handle, actor string,
 		return Completion{}, fmt.Errorf("record model intent: %w", err)
 	}
 
-	completion, err := provider.Complete(ctx, request)
+	completion, err := complete(ctx, provider, request, observer)
 	outcomeCtx, cancelOutcome := session.OutcomeContext(ctx)
 	defer cancelOutcome()
 	if err != nil {
@@ -157,6 +182,26 @@ func (s *Service) run(ctx context.Context, handle *session.Handle, actor string,
 		return Completion{}, fmt.Errorf("record model completion: %w", err)
 	}
 	return completion, nil
+}
+
+// RunObserved is the streaming variant of Run and preserves the same audited boundaries.
+func (s *Service) RunObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, observer StreamObserver) (Completion, error) {
+	return s.run(ctx, handle, actor, provider, request, true, observer)
+}
+
+// ContinueObserved is the streaming variant of Continue.
+func (s *Service) ContinueObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, observer StreamObserver) (Completion, error) {
+	return s.run(ctx, handle, actor, provider, request, false, observer)
+}
+
+func complete(ctx context.Context, provider Provider, request CompletionRequest, observer StreamObserver) (Completion, error) {
+	if observer != nil {
+		if streaming, ok := provider.(StreamingProvider); ok {
+			observer(StreamEvent{Kind: StreamStart})
+			return streaming.CompleteStream(ctx, request, observer)
+		}
+	}
+	return provider.Complete(ctx, request)
 }
 
 // RecordToolResult persists a tool result before it is included in a follow-up request.
