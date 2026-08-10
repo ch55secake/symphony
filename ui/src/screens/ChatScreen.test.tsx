@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { TestRendererSetup } from "@opentui/core/testing"
 import { MockTreeSitterClient } from "@opentui/core/testing"
+import type { SimpleHighlight } from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { commands } from "../commands/registry"
@@ -11,6 +12,26 @@ import { ChatScreen } from "./ChatScreen"
 
 let setup: TestRendererSetup | undefined
 let treeSitterClient: MockTreeSitterClient | undefined
+
+class MarkdownTestClient extends MockTreeSitterClient {
+  override async highlightOnce(content: string, filetype: string) {
+    if (filetype !== "markdown") return { highlights: [] }
+    const highlights: SimpleHighlight[] = []
+    const conceal = (start: number, end: number) => highlights.push([start, end, "conceal", { conceal: "" }])
+    if (content.startsWith("# ")) conceal(0, 2)
+    if (content.startsWith("**Implemented")) {
+      conceal(0, 2)
+      conceal(13, 15)
+    }
+    const firstTick = content.indexOf("`")
+    const secondTick = content.indexOf("`", firstTick + 1)
+    if (firstTick >= 0 && secondTick > firstTick) {
+      conceal(firstTick, firstTick + 1)
+      conceal(secondTick, secondTick + 1)
+    }
+    return { highlights }
+  }
+}
 afterEach(async () => {
   await act(async () => {
     setup?.renderer.destroy()
@@ -81,7 +102,7 @@ describe("ChatScreen", () => {
   })
 
   test("renders assistant Markdown while preserving user text", async () => {
-    treeSitterClient = new MockTreeSitterClient({ autoResolveTimeout: 0 })
+    treeSitterClient = new MarkdownTestClient()
     await act(async () => {
       setup = await testRender(<ChatScreen
       provider="openai"
@@ -114,6 +135,9 @@ describe("ChatScreen", () => {
     expect(frame).toContain("MarkdownMessage")
     expect(frame).toContain("const total = 1 + 2")
     expect(frame).toContain("Use **literal** Markdown here")
+    expect(frame).not.toContain("# Summary")
+    expect(frame).not.toContain("`MarkdownMessage`")
+    expect(frame).not.toContain("```typescript")
   })
 
   test("keeps approval controls separate from the requested command", async () => {
