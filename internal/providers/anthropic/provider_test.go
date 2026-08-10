@@ -170,3 +170,41 @@ func TestRequestMapsToolResults(t *testing.T) {
 		t.Fatalf("messages = %s, want tool use and result", encoded)
 	}
 }
+
+func TestCompleteStreamMapsThinkingAndText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Stream   bool                           `json:"stream"`
+			Thinking struct{ Type, Display string } `json:"thinking"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !body.Stream || body.Thinking.Type != "adaptive" || body.Thinking.Display != "summarized" {
+			t.Fatalf("stream request = %#v, want streaming thinking request", body)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"))
+		_, _ = writer.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\"}}\n\n"))
+		_, _ = writer.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Checking...\"}}\n\n"))
+		_, _ = writer.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\"}}\n\n"))
+		_, _ = writer.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"))
+		_, _ = writer.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n"))
+	}))
+	defer server.Close()
+	provider, err := New(Config{APIKey: "test-key", BaseURL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	var updates []agent.StreamEvent
+	completion, err := provider.CompleteStream(context.Background(), agent.CompletionRequest{Model: "claude-test", ReasoningSummaries: true, Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}}}, func(event agent.StreamEvent) { updates = append(updates, event) })
+	if err != nil {
+		t.Fatalf("CompleteStream() error = %v", err)
+	}
+	if completion.Content != "hello" || completion.StopReason != "end_turn" || completion.InputTokens != 5 || completion.OutputTokens != 3 {
+		t.Fatalf("completion = %#v", completion)
+	}
+	if len(updates) != 2 || updates[0].Kind != agent.StreamReasoning || updates[1].Kind != agent.StreamText {
+		t.Fatalf("updates = %#v", updates)
+	}
+}

@@ -2,11 +2,13 @@
 package opencode
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -127,9 +129,15 @@ func (p *Provider) Complete(ctx context.Context, request agent.CompletionRequest
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Tools    []chatTool    `json:"tools,omitempty"`
+	Model     string         `json:"model"`
+	Messages  []chatMessage  `json:"messages"`
+	Tools     []chatTool     `json:"tools,omitempty"`
+	Stream    bool           `json:"stream,omitempty"`
+	Reasoning *chatReasoning `json:"reasoning,omitempty"`
+}
+
+type chatReasoning struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 type chatMessage struct {
@@ -185,7 +193,11 @@ func toChatRequest(request agent.CompletionRequest) chatRequest {
 	for _, tool := range request.Tools {
 		tools = append(tools, chatTool{Type: "function", Function: chatFunction{Name: tool.Name, Description: tool.Description, Parameters: tool.InputSchema}})
 	}
-	return chatRequest{Model: request.Model, Messages: messages, Tools: tools}
+	result := chatRequest{Model: request.Model, Messages: messages, Tools: tools}
+	if request.ReasoningSummaries {
+		result.Reasoning = &chatReasoning{Enabled: true}
+	}
+	return result
 }
 
 type chatResponse struct {
@@ -242,4 +254,162 @@ func toChatCompletion(response chatResponse) (agent.Completion, error) {
 		InputTokens:  response.Usage.PromptTokens,
 		OutputTokens: response.Usage.CompletionTokens,
 	}, nil
+}
+
+// CompleteStream streams either the Responses or Chat Completions transport.
+func (p *Provider) CompleteStream(ctx context.Context, request agent.CompletionRequest, observer agent.StreamObserver) (agent.Completion, error) {
+	if p.transport == TransportResponses {
+		completion, err := p.responses.CompleteStream(ctx, request, observer)
+		if err == nil {
+			return completion, nil
+		}
+		var responseError *openai.Error
+		if errors.As(err, &responseError) {
+			return agent.Completion{}, &Error{StatusCode: responseError.StatusCode, Detail: responseError.Detail}
+		}
+		return agent.Completion{}, err
+	}
+	payload := toChatRequest(request)
+	payload.Stream = true
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("marshal OpenCode chat streaming request: %w", err)
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("create OpenCode chat streaming request: %w", err)
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpRequest.Header.Set("Content-Type", "application/json")
+	response, err := p.httpClient.Do(httpRequest)
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("send OpenCode chat streaming request: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return agent.Completion{}, &Error{StatusCode: response.StatusCode, Detail: providers.ErrorDetail(response.Body, p.apiKey)}
+	}
+
+	type toolCall struct {
+		ID, Name  string
+		Arguments strings.Builder
+	}
+	tools := make(map[int]*toolCall)
+	var content strings.Builder
+	completion := agent.Completion{}
+	reader := bufio.NewReader(response.Body)
+	for {
+		event, readErr := providers.ReadSSE(reader)
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return agent.Completion{}, fmt.Errorf("read OpenCode chat stream: %w", readErr)
+		}
+		if string(event.Data) == "[DONE]" {
+			break
+		}
+		var envelope struct {
+			Choices []struct {
+				Delta struct {
+					Content          string            `json:"content"`
+					Reasoning        string            `json:"reasoning"`
+					ReasoningContent string            `json:"reasoning_content"`
+					ReasoningDetails []json.RawMessage `json:"reasoning_details"`
+					ToolCalls        []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if err := providers.DecodeSSE(event, &envelope); err != nil {
+			return agent.Completion{}, err
+		}
+		for _, choice := range envelope.Choices {
+			if reasoning := chatReasoningDelta(choice.Delta.Reasoning, choice.Delta.ReasoningContent, choice.Delta.ReasoningDetails); reasoning != "" {
+				emitStream(observer, agent.StreamEvent{Kind: agent.StreamReasoning, Text: reasoning})
+			}
+			if choice.Delta.Content != "" {
+				content.WriteString(choice.Delta.Content)
+				emitStream(observer, agent.StreamEvent{Kind: agent.StreamText, Text: choice.Delta.Content})
+			}
+			if choice.FinishReason != "" {
+				completion.StopReason = choice.FinishReason
+			}
+			for _, delta := range choice.Delta.ToolCalls {
+				current := tools[delta.Index]
+				if current == nil {
+					current = &toolCall{}
+					tools[delta.Index] = current
+				}
+				if delta.ID != "" {
+					current.ID = delta.ID
+				}
+				if delta.Function.Name != "" {
+					current.Name = delta.Function.Name
+				}
+				current.Arguments.WriteString(delta.Function.Arguments)
+			}
+		}
+		completion.InputTokens = envelope.Usage.PromptTokens
+		completion.OutputTokens = envelope.Usage.CompletionTokens
+	}
+	completion.Content = content.String()
+	for _, current := range tools {
+		arguments := []byte(current.Arguments.String())
+		if len(arguments) == 0 {
+			arguments = []byte(`{}`)
+		}
+		var object map[string]any
+		if err := json.Unmarshal(arguments, &object); err != nil || object == nil {
+			return agent.Completion{}, errors.New("OpenCode streamed function arguments are not a JSON object")
+		}
+		completion.ToolCalls = append(completion.ToolCalls, events.ModelToolCall{ID: current.ID, Name: current.Name, Arguments: arguments})
+	}
+	return completion, nil
+}
+
+func chatReasoningDelta(reasoning, reasoningContent string, details []json.RawMessage) string {
+	if reasoning != "" {
+		return reasoning
+	}
+	if reasoningContent != "" {
+		return reasoningContent
+	}
+	var text strings.Builder
+	for _, raw := range details {
+		var detail struct {
+			Type    string `json:"type"`
+			Summary string `json:"summary"`
+			Text    string `json:"text"`
+		}
+		if json.Unmarshal(raw, &detail) != nil {
+			continue
+		}
+		switch detail.Type {
+		case "reasoning.summary", "reasoning.text":
+			if detail.Summary != "" {
+				text.WriteString(detail.Summary)
+			} else {
+				text.WriteString(detail.Text)
+			}
+		}
+	}
+	return text.String()
+}
+
+func emitStream(observer agent.StreamObserver, event agent.StreamEvent) {
+	if observer != nil && event.Text != "" {
+		observer(event)
+	}
 }

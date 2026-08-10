@@ -135,3 +135,40 @@ func TestRequestMapsToolResults(t *testing.T) {
 		t.Fatalf("input = %s, want function call and result", encoded)
 	}
 }
+
+func TestCompleteStreamMapsTextReasoningAndCompletion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Stream    bool `json:"stream"`
+			Reasoning struct {
+				Summary string `json:"summary"`
+			} `json:"reasoning"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !body.Stream || body.Reasoning.Summary != "auto" {
+			t.Fatalf("stream request = %#v, want streaming reasoning request", body)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"Inspecting...\"}\n\n"))
+		_, _ = writer.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"))
+		_, _ = writer.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}],\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}}\n\n"))
+	}))
+	defer server.Close()
+	provider, err := New(Config{APIKey: "test-key", BaseURL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	var updates []agent.StreamEvent
+	completion, err := provider.CompleteStream(context.Background(), agent.CompletionRequest{Model: "gpt-test", ReasoningSummaries: true}, func(event agent.StreamEvent) { updates = append(updates, event) })
+	if err != nil {
+		t.Fatalf("CompleteStream() error = %v", err)
+	}
+	if completion.Content != "hello" || completion.InputTokens != 4 || completion.OutputTokens != 2 {
+		t.Fatalf("completion = %#v", completion)
+	}
+	if len(updates) != 2 || updates[0].Kind != agent.StreamReasoning || updates[1].Kind != agent.StreamText {
+		t.Fatalf("updates = %#v", updates)
+	}
+}
