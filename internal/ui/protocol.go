@@ -21,18 +21,19 @@ type Message struct {
 
 // State is the display-only session snapshot sent from Go to OpenTUI.
 type State struct {
-	Phase      string            `json:"phase"`
-	Provider   string            `json:"provider,omitempty"`
-	Model      string            `json:"model,omitempty"`
-	Theme      string            `json:"theme,omitempty"`
-	Workspace  string            `json:"workspace,omitempty"`
-	Status     string            `json:"status,omitempty"`
-	Transcript []TranscriptEntry `json:"transcript,omitempty"`
-	Approval   *Approval         `json:"approval,omitempty"`
-	Selection  string            `json:"selection,omitempty"`
-	Options    []string          `json:"options,omitempty"`
-	AllowAll   bool              `json:"allow_all,omitempty"`
-	Mode       string            `json:"mode,omitempty"`
+	Phase              string            `json:"phase"`
+	Provider           string            `json:"provider,omitempty"`
+	Model              string            `json:"model,omitempty"`
+	Theme              string            `json:"theme,omitempty"`
+	Workspace          string            `json:"workspace,omitempty"`
+	Status             string            `json:"status,omitempty"`
+	Transcript         []TranscriptEntry `json:"transcript,omitempty"`
+	Approval           *Approval         `json:"approval,omitempty"`
+	Selection          string            `json:"selection,omitempty"`
+	Options            []string          `json:"options,omitempty"`
+	AllowAll           bool              `json:"allow_all,omitempty"`
+	Mode               string            `json:"mode,omitempty"`
+	ReasoningSummaries bool              `json:"reasoning_summaries,omitempty"`
 }
 
 // Approval contains only the operator-safe details needed by the UI.

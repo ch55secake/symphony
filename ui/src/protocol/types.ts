@@ -1,5 +1,5 @@
 export type TranscriptEntry = {
-  role: "user" | "assistant" | "activity"
+  role: "user" | "assistant" | "reasoning" | "activity"
   label: string
   content?: string
   tool?: ToolActivity
@@ -34,6 +34,7 @@ type SessionDetails = {
   status?: string
   allow_all?: boolean
   mode?: Mode
+  reasoning_summaries?: boolean
 }
 
 export type UIState =

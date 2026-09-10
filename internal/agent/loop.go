@@ -111,7 +111,12 @@ func (l *Loop) RunWithApproval(ctx context.Context, handle *session.Handle, acto
 
 // RunWithApprovalObserved runs until completion or approval while reporting safe tool activity.
 func (l *Loop) RunWithApprovalObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, observer ActivityObserver) (LoopResult, error) {
-	return l.run(ctx, handle, actor, provider, request, 0, observer)
+	return l.RunWithApprovalStreamObserved(ctx, handle, actor, provider, request, observer, nil)
+}
+
+// RunWithApprovalStreamObserved reports safe tool activity and live model output.
+func (l *Loop) RunWithApprovalStreamObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, activityObserver ActivityObserver, streamObserver StreamObserver) (LoopResult, error) {
+	return l.run(ctx, handle, actor, provider, request, 0, activityObserver, streamObserver)
 }
 
 // Approve persists approval, executes the staged action, and resumes the loop.
@@ -121,6 +126,11 @@ func (l *Loop) Approve(ctx context.Context, handle *session.Handle, actor string
 
 // ApproveObserved approves an action while reporting safe tool activity.
 func (l *Loop) ApproveObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, observer ActivityObserver) (LoopResult, error) {
+	return l.ApproveStreamObserved(ctx, handle, actor, provider, pending, observer, nil)
+}
+
+// ApproveStreamObserved resumes an action while reporting tool activity and model output.
+func (l *Loop) ApproveStreamObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, observer ActivityObserver, streamObserver StreamObserver) (LoopResult, error) {
 	if err := pending.begin(handle); err != nil {
 		return LoopResult{}, err
 	}
@@ -153,7 +163,7 @@ func (l *Loop) ApproveObserved(ctx context.Context, handle *session.Handle, acto
 			return LoopResult{Messages: messages}, errors.Join(fmt.Errorf("execute approved action: %w", err), fmt.Errorf("record failed tool result: %w", recordErr))
 		}
 		if recoverable {
-			return l.resume(ctx, handle, actor, provider, pending, result, observer)
+			return l.resumeStream(ctx, handle, actor, provider, pending, result, observer, streamObserver)
 		}
 		return LoopResult{Messages: messages}, fmt.Errorf("execute approved action: %w", err)
 	}
@@ -161,7 +171,7 @@ func (l *Loop) ApproveObserved(ctx context.Context, handle *session.Handle, acto
 	if err := l.recordToolResult(ctx, handle, pending.Action, result); err != nil {
 		return LoopResult{}, fmt.Errorf("record approved tool result: %w", err)
 	}
-	return l.resume(ctx, handle, actor, provider, pending, result, observer)
+	return l.resumeStream(ctx, handle, actor, provider, pending, result, observer, streamObserver)
 }
 
 // Deny persists denial and resumes the loop with an error tool result.
@@ -171,6 +181,11 @@ func (l *Loop) Deny(ctx context.Context, handle *session.Handle, actor string, p
 
 // DenyObserved denies an action while reporting safe tool activity.
 func (l *Loop) DenyObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, reasonCode string, observer ActivityObserver) (LoopResult, error) {
+	return l.DenyStreamObserved(ctx, handle, actor, provider, pending, reasonCode, observer, nil)
+}
+
+// DenyStreamObserved resumes a denied action while reporting tool activity and model output.
+func (l *Loop) DenyStreamObserved(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, reasonCode string, observer ActivityObserver, streamObserver StreamObserver) (LoopResult, error) {
 	if err := pending.begin(handle); err != nil {
 		return LoopResult{}, err
 	}
@@ -198,27 +213,31 @@ func (l *Loop) DenyObserved(ctx context.Context, handle *session.Handle, actor s
 	if err := l.recordToolResult(ctx, handle, pending.Action, result); err != nil {
 		return LoopResult{}, fmt.Errorf("record denied tool result: %w", err)
 	}
-	return l.resume(ctx, handle, actor, provider, pending, result, observer)
+	return l.resumeStream(ctx, handle, actor, provider, pending, result, observer, streamObserver)
 }
 
 func (l *Loop) resume(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, result ToolResult, observer ActivityObserver) (LoopResult, error) {
+	return l.resumeStream(ctx, handle, actor, provider, pending, result, observer, nil)
+}
+
+func (l *Loop) resumeStream(ctx context.Context, handle *session.Handle, actor string, provider Provider, pending *PendingApproval, result ToolResult, observer ActivityObserver, streamObserver StreamObserver) (LoopResult, error) {
 	pending.continuation.Messages = append(pending.continuation.Messages, Message{Role: RoleUser, ToolResults: []ToolResult{result}})
-	resumed, err := l.run(ctx, handle, actor, provider, pending.continuation, pending.round, observer)
+	resumed, err := l.run(ctx, handle, actor, provider, pending.continuation, pending.round, observer, streamObserver)
 	if err != nil && len(resumed.Messages) == 0 {
 		resumed.Messages = append([]Message(nil), pending.continuation.Messages...)
 	}
 	return resumed, err
 }
 
-func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, startRound int, observer ActivityObserver) (LoopResult, error) {
+func (l *Loop) run(ctx context.Context, handle *session.Handle, actor string, provider Provider, request CompletionRequest, startRound int, observer ActivityObserver, streamObserver StreamObserver) (LoopResult, error) {
 	current := request
 	for round := startRound; ; round++ {
 		var completion Completion
 		var err error
 		if round == 0 {
-			completion, err = l.turns.Run(ctx, handle, actor, provider, current)
+			completion, err = l.turns.RunObserved(ctx, handle, actor, provider, current, streamObserver)
 		} else {
-			completion, err = l.turns.Continue(ctx, handle, actor, provider, current)
+			completion, err = l.turns.ContinueObserved(ctx, handle, actor, provider, current, streamObserver)
 		}
 		if err != nil {
 			return LoopResult{Messages: append([]Message(nil), current.Messages...)}, err

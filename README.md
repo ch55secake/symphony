@@ -104,17 +104,23 @@ events retain only output hashes, byte counts, truncation state, exit code, and 
 `internal/agent` persists user messages and model-request intent before contacting a
 provider, then persists the model completion or failure. It exposes a provider-neutral
 completion contract so OpenAI and Anthropic adapters can share the same audited turn path.
+When supported by the provider, model text is streamed live to the CLI and OpenTUI while
+only the assembled terminal completion is persisted. Use `--reasoning-summaries` or the
+interactive `/reasoning on` command to request provider-generated reasoning summaries;
+Symphony never exposes raw hidden chain-of-thought and summaries are live-only.
 
 ## OpenAI Provider
 
-`internal/providers/openai` implements the non-streaming OpenAI Responses API. Configure
+`internal/providers/openai` implements the OpenAI Responses API, including SSE streaming.
+Configure
 its `Config.APIKey` from `OPENAI_API_KEY` at process composition time; the provider sends
 `store: false` so OpenAI does not become an additional conversation store. API keys and
 response error bodies are never persisted by Symphony.
 
 ## Anthropic Provider
 
-`internal/providers/anthropic` implements the non-streaming Anthropic Messages API.
+`internal/providers/anthropic` implements the Anthropic Messages API, including SSE
+streaming and summarized thinking when explicitly enabled.
 Configure its `Config.APIKey` from `ANTHROPIC_API_KEY` at process composition time. API
 keys and Anthropic response error bodies are never persisted by Symphony.
 
@@ -154,6 +160,9 @@ Run an audited agent session with one provider credential in the environment:
 KURRENTDB_URL='kurrentdb://localhost:2113?tls=false' OPENAI_API_KEY='...' \
   go run ./cmd/symphony run --provider openai --model gpt-5.2 --workspace . "Read README.md"
 ```
+
+Add `--reasoning-summaries` to request provider-generated summaries during streaming.
+The option is disabled by default because summary support is model-dependent.
 
 Anthropic uses `ANTHROPIC_API_KEY` and `--provider anthropic`. The runner prints the final
 completion. Write and command requests stop at a terminal prompt showing only safe action

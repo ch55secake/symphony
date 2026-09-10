@@ -2,11 +2,13 @@
 package anthropic
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -130,6 +132,13 @@ type messagesRequest struct {
 	System    string           `json:"system,omitempty"`
 	Messages  []message        `json:"messages"`
 	Tools     []toolDefinition `json:"tools,omitempty"`
+	Stream    bool             `json:"stream,omitempty"`
+	Thinking  *thinkingConfig  `json:"thinking,omitempty"`
+}
+
+type thinkingConfig struct {
+	Type    string `json:"type"`
+	Display string `json:"display,omitempty"`
 }
 
 type message struct {
@@ -185,13 +194,17 @@ func toRequest(request agent.CompletionRequest, maxTokens int) (messagesRequest,
 	for _, item := range request.Tools {
 		tools = append(tools, toolDefinition{Name: item.Name, Description: item.Description, InputSchema: item.InputSchema})
 	}
-	return messagesRequest{
+	result := messagesRequest{
 		Model:     request.Model,
 		MaxTokens: maxTokens,
 		System:    strings.Join(system, "\n\n"),
 		Messages:  messages,
 		Tools:     tools,
-	}, nil
+	}
+	if request.ReasoningSummaries {
+		result.Thinking = &thinkingConfig{Type: "adaptive", Display: "summarized"}
+	}
+	return result, nil
 }
 
 func messageContent(message agent.Message) any {
@@ -256,4 +269,123 @@ func toCompletion(response messagesResponse) (agent.Completion, error) {
 		InputTokens:  response.Usage.InputTokens,
 		OutputTokens: response.Usage.OutputTokens,
 	}, nil
+}
+
+// CompleteStream streams Messages output and assembles the final completion.
+func (p *Provider) CompleteStream(ctx context.Context, request agent.CompletionRequest, observer agent.StreamObserver) (agent.Completion, error) {
+	payload, err := toRequest(request, p.maxTokens)
+	if err != nil {
+		return agent.Completion{}, err
+	}
+	payload.Stream = true
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("marshal %s streaming request: %w", p.providerName, err)
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("create %s streaming request: %w", p.providerName, err)
+	}
+	if p.bearerAuth {
+		httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
+	} else {
+		httpRequest.Header.Set("x-api-key", p.apiKey)
+		httpRequest.Header.Set("anthropic-version", apiVersion)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	response, err := p.httpClient.Do(httpRequest)
+	if err != nil {
+		return agent.Completion{}, fmt.Errorf("send %s streaming request: %w", p.providerName, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return agent.Completion{}, &Error{StatusCode: response.StatusCode, Detail: providers.ErrorDetail(response.Body, p.apiKey), Provider: p.providerName}
+	}
+
+	type streamBlock struct {
+		Type, ID, Name string
+		Input          strings.Builder
+	}
+	blocks := make(map[int]*streamBlock)
+	var content strings.Builder
+	completion := agent.Completion{}
+	reader := bufio.NewReader(response.Body)
+	for {
+		event, readErr := providers.ReadSSE(reader)
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return agent.Completion{}, fmt.Errorf("read %s stream: %w", p.providerName, readErr)
+		}
+		var envelope struct {
+			Type  string `json:"type"`
+			Index int    `json:"index"`
+			Delta struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				PartialJSON string `json:"partial_json"`
+				StopReason  string `json:"stop_reason"`
+			} `json:"delta"`
+			ContentBlock struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"content_block"`
+			Message struct {
+				Usage usage `json:"usage"`
+			} `json:"message"`
+			StopReason string `json:"stop_reason"`
+			Usage      usage  `json:"usage"`
+		}
+		if err := providers.DecodeSSE(event, &envelope); err != nil {
+			return agent.Completion{}, err
+		}
+		switch envelope.Type {
+		case "message_start":
+			completion.InputTokens = envelope.Message.Usage.InputTokens
+		case "content_block_start":
+			blocks[envelope.Index] = &streamBlock{Type: envelope.ContentBlock.Type, ID: envelope.ContentBlock.ID, Name: envelope.ContentBlock.Name}
+		case "content_block_delta":
+			switch envelope.Delta.Type {
+			case "text_delta":
+				content.WriteString(envelope.Delta.Text)
+				emitStream(observer, agent.StreamEvent{Kind: agent.StreamText, Text: envelope.Delta.Text})
+			case "thinking_delta":
+				emitStream(observer, agent.StreamEvent{Kind: agent.StreamReasoning, Text: envelope.Delta.Thinking})
+			case "input_json_delta":
+				if current := blocks[envelope.Index]; current != nil {
+					current.Input.WriteString(envelope.Delta.PartialJSON)
+				}
+			}
+		case "message_delta":
+			completion.StopReason = envelope.Delta.StopReason
+			completion.OutputTokens = envelope.Usage.OutputTokens
+		case "error":
+			return agent.Completion{}, errors.New("Anthropic stream returned an error")
+		}
+	}
+	completion.Content = content.String()
+	for _, current := range blocks {
+		if current.Type != "tool_use" {
+			continue
+		}
+		arguments := []byte(current.Input.String())
+		if len(arguments) == 0 {
+			arguments = []byte(`{}`)
+		}
+		var object map[string]any
+		if err := json.Unmarshal(arguments, &object); err != nil || object == nil {
+			return agent.Completion{}, errors.New("Anthropic streamed tool input is not a JSON object")
+		}
+		completion.ToolCalls = append(completion.ToolCalls, events.ModelToolCall{ID: current.ID, Name: current.Name, Arguments: arguments})
+	}
+	return completion, nil
+}
+
+func emitStream(observer agent.StreamObserver, event agent.StreamEvent) {
+	if observer != nil && event.Text != "" {
+		observer(event)
+	}
 }

@@ -13,15 +13,16 @@ import (
 
 // Settings contains configuration that may be supplied by a file or environment.
 type Settings struct {
-	KurrentDBURL    string
-	Provider        string
-	Transport       string
-	Model           string
-	Workspace       string
-	OpenAIAPIKey    string
-	AnthropicAPIKey string
-	OpenCodeAPIKey  string
-	Theme           string
+	KurrentDBURL       string
+	Provider           string
+	Transport          string
+	Model              string
+	Workspace          string
+	OpenAIAPIKey       string
+	AnthropicAPIKey    string
+	OpenCodeAPIKey     string
+	Theme              string
+	ReasoningSummaries bool
 }
 
 // Load reads the user configuration file and applies environment overrides.
@@ -64,16 +65,56 @@ func LoadFile(path string) (Settings, error) {
 		}
 	}
 	return Settings{
-		KurrentDBURL:    v.GetString("kurrentdb_url"),
-		Provider:        v.GetString("provider"),
-		Transport:       v.GetString("transport"),
-		Model:           v.GetString("model"),
-		Workspace:       v.GetString("workspace"),
-		OpenAIAPIKey:    v.GetString("openai_api_key"),
-		AnthropicAPIKey: v.GetString("anthropic_api_key"),
-		OpenCodeAPIKey:  v.GetString("opencode_api_key"),
-		Theme:           v.GetString("theme"),
+		KurrentDBURL:       v.GetString("kurrentdb_url"),
+		Provider:           v.GetString("provider"),
+		Transport:          v.GetString("transport"),
+		Model:              v.GetString("model"),
+		Workspace:          v.GetString("workspace"),
+		OpenAIAPIKey:       v.GetString("openai_api_key"),
+		AnthropicAPIKey:    v.GetString("anthropic_api_key"),
+		OpenCodeAPIKey:     v.GetString("opencode_api_key"),
+		Theme:              v.GetString("theme"),
+		ReasoningSummaries: v.GetBool("reasoning_summaries"),
 	}, nil
+}
+
+// SaveReasoningSummaries persists the explicit reasoning-summary preference.
+func SaveReasoningSummaries(enabled bool) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	return saveSetting(path, "reasoning_summaries", enabled)
+}
+
+func saveSetting(path, key string, value any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create config file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close config file: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("restrict config permissions: %w", err)
+	}
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.Is(err, os.ErrNotExist) && !errors.As(err, &notFound) {
+			return fmt.Errorf("read configuration: %w", err)
+		}
+	}
+	v.Set(key, value)
+	if err := v.WriteConfigAs(path); err != nil {
+		return fmt.Errorf("write configuration: %w", err)
+	}
+	return nil
 }
 
 // SaveTheme persists the selected built-in terminal theme.

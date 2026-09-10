@@ -94,6 +94,47 @@ func TestCompleteChatMapsToolsAndToolResults(t *testing.T) {
 	}
 }
 
+func TestCompleteChatStreamMapsReasoning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Stream    bool `json:"stream"`
+			Reasoning struct {
+				Enabled bool `json:"enabled"`
+			} `json:"reasoning"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !body.Stream || !body.Reasoning.Enabled {
+			t.Fatalf("request = %#v, want streaming reasoning request", body)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning\":\"Planning...\"}}]}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":4}}\n\n"))
+		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	provider, err := New(Config{APIKey: "test-key", BaseURL: server.URL, Transport: TransportChat, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	var updates []agent.StreamEvent
+	completion, err := provider.CompleteStream(context.Background(), agent.CompletionRequest{
+		Model: "kimi-test", ReasoningSummaries: true,
+		Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}},
+	}, func(event agent.StreamEvent) { updates = append(updates, event) })
+	if err != nil {
+		t.Fatalf("CompleteStream() error = %v", err)
+	}
+	if completion.Content != "hello" || completion.InputTokens != 7 || completion.OutputTokens != 4 {
+		t.Fatalf("completion = %#v, want streamed content and usage", completion)
+	}
+	if len(updates) != 2 || updates[0].Kind != agent.StreamReasoning || updates[1].Kind != agent.StreamText {
+		t.Fatalf("updates = %#v, want reasoning and text", updates)
+	}
+}
+
 func TestCompleteChatReturnsSafeHTTPError(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

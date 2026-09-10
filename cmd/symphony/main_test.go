@@ -649,6 +649,15 @@ func TestNewProviderUsesConfiguredOpenCodeAPIKey(t *testing.T) {
 	}
 }
 
+func TestProviderAPIKeyUsesOpenCodeEnvironmentForBothTransports(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "environment-key")
+	for _, provider := range []string{"opencode", "opencode-go"} {
+		if got := providerAPIKey(provider, appconfig.Settings{}); got != "environment-key" {
+			t.Fatalf("providerAPIKey(%q) = %q, want environment key", provider, got)
+		}
+	}
+}
+
 func testRuntime(t *testing.T, root string, provider agent.Provider, setup func(*workspace.Service) ([]agent.Tool, error)) (runtimeFactory, *memoryStore) {
 	t.Helper()
 	store := &memoryStore{}

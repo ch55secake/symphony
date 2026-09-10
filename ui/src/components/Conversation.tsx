@@ -20,9 +20,10 @@ export function Conversation({ entries, theme, treeSitterClient }: { entries: Tr
     {entries.map((entry, index) => {
       if (entry.role === "activity" && entry.tool) return <ToolActivityRow key={entry.tool.id} tool={entry.tool} theme={theme} />
       const user = entry.role === "user"
+      const reasoning = entry.role === "reasoning"
       return <box key={index} flexDirection="column" paddingLeft={user ? 0 : 2} paddingRight={1} marginBottom={1}>
-        <text fg={user ? theme.accent : theme.model}>{user ? "YOU" : entry.label.toUpperCase()}</text>
-        {user ? <text fg={theme.muted}>{entry.content}</text> : <MarkdownMessage content={entry.content ?? ""} theme={theme} treeSitterClient={treeSitterClient} />}
+        <text fg={user ? theme.accent : reasoning ? theme.subtle : theme.model}>{user ? "YOU" : reasoning ? "THINKING" : entry.label.toUpperCase()}</text>
+        {user ? <text fg={theme.muted}>{entry.content}</text> : reasoning ? <text fg={theme.subtle}>{entry.content}</text> : <MarkdownMessage content={entry.content ?? ""} theme={theme} treeSitterClient={treeSitterClient} />}
       </box>
     })}
   </scrollbox>

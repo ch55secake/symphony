@@ -65,9 +65,9 @@ export function App({ transport }: { transport: Transport }) {
     if (state.phase === "settings") {
       if (key.name === "up" || key.name === "down" || key.name === "return") key.preventDefault()
       if (key.name === "up") setSettingSelected((index) => Math.max(0, index - 1))
-      if (key.name === "down") setSettingSelected((index) => Math.min(2, index + 1))
+       if (key.name === "down") setSettingSelected((index) => Math.min(3, index + 1))
       if (key.name === "return") {
-        const prompt = settingSelected === 0 ? "/model" : settingSelected === 1 ? "/theme" : state.allow_all ? "/allow-all off" : "/allow-all"
+         const prompt = settingSelected === 0 ? "/model" : settingSelected === 1 ? "/theme" : settingSelected === 2 ? (state.allow_all ? "/allow-all off" : "/allow-all") : (state.reasoning_summaries ? "/reasoning off" : "/reasoning on")
         void transport.send({ type: "prompt.submit", payload: { prompt } })
       }
       if (key.name === "escape") void transport.send({ type: "chat.start" })
@@ -98,6 +98,6 @@ export function App({ transport }: { transport: Transport }) {
   if (state.phase === "welcome") return <WelcomeScreen {...state} mode={mode} value={value} onChange={setValue} onSubmit={() => void submit()} suggestions={suggestions} selected={commandSelected} theme={theme} width={width} height={height} />
   if (state.phase === "select") return <SelectionScreen name={state.selection ?? "option"} options={state.options ?? []} selected={optionSelected} current={state.selection === "model" ? state.model : state.theme ?? "default"} width={width} height={height} theme={theme} />
   if (state.phase === "confirm") return <ConfirmationScreen status={state.status} theme={theme} width={width} height={height} />
-  if (state.phase === "settings") return <SettingsScreen provider={state.provider} model={state.model} themeName={state.theme} workspace={state.workspace} allowAll={state.allow_all ?? false} selected={settingSelected} width={width} height={height} theme={theme} />
+  if (state.phase === "settings") return <SettingsScreen provider={state.provider} model={state.model} themeName={state.theme} workspace={state.workspace} allowAll={state.allow_all ?? false} reasoningSummaries={state.reasoning_summaries ?? false} selected={settingSelected} width={width} height={height} theme={theme} />
   return <ChatScreen provider={state.provider} model={state.model} workspace={state.workspace} status={state.status} transcript={state.transcript ?? []} approval={state.approval} value={value} onChange={setValue} onSubmit={() => void submit()} suggestions={suggestions} selected={commandSelected} mode={mode} theme={theme} width={width} height={height} />
 }

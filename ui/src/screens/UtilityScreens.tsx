@@ -25,7 +25,7 @@ export function ConfirmationScreen({ status, theme, width, height }: { status?: 
   </box>
 }
 
-const editableSettings = ["MODEL", "THEME", "APPROVALS"] as const
+const editableSettings = ["MODEL", "THEME", "APPROVALS", "THINKING"] as const
 
 function SettingRow({ label, value, selected, color, theme }: { label: string; value: string; selected: boolean; color?: string; theme: Theme }) {
   return <box flexDirection="row" paddingLeft={1} style={{ width: "100%" }}>
@@ -36,7 +36,7 @@ function SettingRow({ label, value, selected, color, theme }: { label: string; v
   </box>
 }
 
-export function SettingsScreen({ provider, model, themeName, workspace, allowAll, selected, width, height, theme }: { provider: string; model: string; themeName?: string; workspace: string; allowAll: boolean; selected: number; width: number; height: number; theme: Theme }) {
+export function SettingsScreen({ provider, model, themeName, workspace, allowAll, reasoningSummaries = false, selected, width, height, theme }: { provider: string; model: string; themeName?: string; workspace: string; allowAll: boolean; reasoningSummaries?: boolean; selected: number; width: number; height: number; theme: Theme }) {
   if (height < 14 || width < 40) return <box alignItems="center" justifyContent="center" style={{ width, height }}>
     <text fg={theme.warning}>Resize terminal to continue</text>
   </box>
@@ -51,11 +51,12 @@ export function SettingsScreen({ provider, model, themeName, workspace, allowAll
         <SettingRow label={editableSettings[0]} value={model} selected={selected === 0} theme={theme} />
         <SettingRow label={editableSettings[1]} value={(themeName ?? "default").toUpperCase()} selected={selected === 1} color={selected === 1 ? theme.accent : undefined} theme={theme} />
         <SettingRow label={editableSettings[2]} value={allowAll ? "ALLOW ALL" : "ASK EVERY TIME"} selected={selected === 2} color={allowAll ? theme.warning : theme.success} theme={theme} />
+        <SettingRow label={editableSettings[3]} value={reasoningSummaries ? "SUMMARIES ON" : "OFF"} selected={selected === 3} color={reasoningSummaries ? theme.accent : theme.muted} theme={theme} />
       </box>
-      <box border={["top"]} borderColor={theme.border} flexDirection="column" paddingTop={1} style={{ width: "100%" }}>
+      {!compact && <box border={["top"]} borderColor={theme.border} flexDirection="column" paddingTop={1} style={{ width: "100%" }}>
         <SettingRow label="PROVIDER" value={provider} selected={false} theme={theme} />
         <SettingRow label="WORKSPACE" value={workspace} selected={false} theme={theme} />
-      </box>
+      </box>}
     </box>
     <text fg={theme.accent}>UP/DOWN <span fg={theme.subtle}>MOVE</span>   ENTER <span fg={theme.subtle}>CHANGE</span>   ESC <span fg={theme.subtle}>BACK</span></text>
   </box>

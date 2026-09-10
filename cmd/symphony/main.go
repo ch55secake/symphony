@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,19 +41,25 @@ const localKurrentDBURL = "kurrentdb://localhost:2113?tls=false"
 const uiOperationShutdownTimeout = 5 * time.Second
 
 type config struct {
-	provider         string
-	transport        string
-	model            string
-	workspace        string
-	prompt           string
-	connectionString string
-	apiKey           string
+	provider           string
+	transport          string
+	model              string
+	workspace          string
+	prompt             string
+	connectionString   string
+	apiKey             string
+	reasoningSummaries bool
 }
 
 type uiToolActivity struct {
 	Activity      agent.ToolActivity
 	AfterMessages int
 	SourceID      string
+}
+
+type uiStreamState struct {
+	Content   string
+	Reasoning string
 }
 
 type runtime struct {
@@ -252,7 +259,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 	var pending *agent.PendingApproval
 	allowAll := false
 	mode := agent.ModeBuild
-	if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat", Mode: string(mode)}); err != nil {
+	if err := ui.SendState(child.Writer, ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat", Mode: string(mode), ReasoningSummaries: config.reasoningSummaries}); err != nil {
 		return err
 	}
 	stateUpdates := make(chan ui.State, 1)
@@ -294,7 +301,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 	}
 	sendModeState := func(phase, status string) error {
 		if phase == "welcome" {
-			return sendState(ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Mode: string(mode)})
+			return sendState(ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Mode: string(mode), ReasoningSummaries: config.reasoningSummaries})
 		}
 		return sendUIState(sendState, config, messages, activities, pending, status, mode)
 	}
@@ -307,6 +314,30 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 		err    error
 	}
 	activityUpdates := make(chan uiToolActivity, 256)
+	streamUpdates := make(chan struct{}, 1)
+	var streamMu sync.Mutex
+	var liveStream uiStreamState
+	updateStream := func(event agent.StreamEvent) {
+		streamMu.Lock()
+		switch event.Kind {
+		case agent.StreamStart:
+			liveStream = uiStreamState{}
+		case agent.StreamText:
+			liveStream.Content += event.Text
+		case agent.StreamReasoning:
+			liveStream.Reasoning += event.Text
+		}
+		streamMu.Unlock()
+		select {
+		case streamUpdates <- struct{}{}:
+		default:
+		}
+	}
+	readStream := func() uiStreamState {
+		streamMu.Lock()
+		defer streamMu.Unlock()
+		return liveStream
+	}
 	reads := make(chan readResult, 1)
 	readCtx, stopReading := context.WithCancel(ctx)
 	defer stopReading()
@@ -373,6 +404,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				select {
 				case update := <-activityUpdates:
 					activities = upsertUIActivity(activities, update)
+				case <-streamUpdates:
 				default:
 					draining = false
 				}
@@ -396,7 +428,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 				if errors.Is(completed.err, context.Canceled) {
 					status = "Canceled"
 				}
-				if err := sendUIState(sendState, config, messages, activities, pending, status, mode); err != nil {
+				if err := sendUIStateStream(sendState, config, messages, activities, pending, status, mode, readStream()); err != nil {
 					return err
 				}
 				continue
@@ -404,13 +436,18 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			resolvingApproval = nil
 			messages, pending = completed.result.Messages, completed.result.Pending
 			activities = alignUIActivities(messages, activities)
-			if err := sendUIState(sendState, config, messages, activities, pending, "READY", mode); err != nil {
+			if err := sendUIStateStream(sendState, config, messages, activities, pending, "READY", mode, uiStreamState{}); err != nil {
 				return err
 			}
 			continue
 		case update := <-activityUpdates:
 			activities = upsertUIActivity(activities, update)
-			if err := sendUIState(sendState, config, messages, activities, pending, "WORKING", mode); err != nil {
+			if err := sendUIStateStream(sendState, config, messages, activities, pending, "WORKING", mode, readStream()); err != nil {
+				return err
+			}
+			continue
+		case <-streamUpdates:
+			if err := sendUIStateStream(sendState, config, messages, activities, pending, "WORKING", mode, readStream()); err != nil {
 				return err
 			}
 			continue
@@ -428,7 +465,7 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 			message := incoming.message
 			switch message.Type {
 			case "app.ready":
-				if err := sendState(ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat", Mode: string(mode)}); err != nil {
+				if err := sendState(ui.State{Phase: "welcome", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: "Enter starts chat", Mode: string(mode), ReasoningSummaries: config.reasoningSummaries}); err != nil {
 					return err
 				}
 				continue
@@ -560,10 +597,11 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 						default:
 						}
 					}
+					streamObserver := func(event agent.StreamEvent) { updateStream(event) }
 					operationMode := mode
-					result, err := runtime.loop.RunWithApprovalObserved(operationCtx, handle, actor, runtime.provider, agent.CompletionRequest{Model: config.model, Instructions: operationMode.Instructions(), Messages: requestMessages, Tools: agent.ToolsForMode(runtime.tools, operationMode)}, observer)
+					result, err := runtime.loop.RunWithApprovalStreamObserved(operationCtx, handle, actor, runtime.provider, agent.CompletionRequest{Model: config.model, Instructions: operationMode.Instructions(), Messages: requestMessages, Tools: agent.ToolsForMode(runtime.tools, operationMode), ReasoningSummaries: config.reasoningSummaries}, observer, streamObserver)
 					for err == nil && result.Pending != nil && allowAll && operationMode == agent.ModeBuild {
-						result, err = runtime.loop.ApproveObserved(operationCtx, handle, actor, runtime.provider, result.Pending, observer)
+						result, err = runtime.loop.ApproveStreamObserved(operationCtx, handle, actor, runtime.provider, result.Pending, observer, streamObserver)
 					}
 					return result, err
 				})
@@ -631,10 +669,11 @@ func runOpenTUI(ctx context.Context, factory runtimeFactory, startKurrent kurren
 						default:
 						}
 					}
+					streamObserver := func(event agent.StreamEvent) { updateStream(event) }
 					if request.Approved {
-						return runtime.loop.ApproveObserved(operationCtx, handle, actor, runtime.provider, approval, observer)
+						return runtime.loop.ApproveStreamObserved(operationCtx, handle, actor, runtime.provider, approval, observer, streamObserver)
 					}
-					return runtime.loop.DenyObserved(operationCtx, handle, actor, runtime.provider, approval, "user_denied", observer)
+					return runtime.loop.DenyStreamObserved(operationCtx, handle, actor, runtime.provider, approval, "user_denied", observer, streamObserver)
 				})
 				continue
 			}
@@ -694,7 +733,7 @@ func handleUICommand(ctx context.Context, runtime *runtime, handle *session.Hand
 	}
 	switch parts[0] {
 	case "/help":
-		return "Commands: /plan, /build, /model [NAME], /theme [default|contrast|mono], /allow-all [on|off], /settings", allowAll, true
+		return "Commands: /plan, /build, /model [NAME], /theme [default|contrast|mono], /allow-all [on|off], /reasoning [on|off], /settings", allowAll, true
 	case "/settings":
 		settings, err := appconfig.Load()
 		if err != nil {
@@ -725,6 +764,19 @@ func handleUICommand(ctx context.Context, runtime *runtime, handle *session.Hand
 			return "Error: " + err.Error(), allowAll, true
 		}
 		return "Theme: " + parts[1] + " (applies next session)", allowAll, true
+	case "/reasoning":
+		if len(parts) != 2 || (parts[1] != "on" && parts[1] != "off") {
+			return "Usage: /reasoning [on|off]", allowAll, true
+		}
+		enabled := parts[1] == "on"
+		if err := runtime.sessions.Record(ctx, handle, events.SessionConfigChanged, actor, events.SessionConfigChangedPayload{Setting: "reasoning_summaries", Current: parts[1]}); err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		if err := appconfig.SaveReasoningSummaries(enabled); err != nil {
+			return "Error: " + err.Error(), allowAll, true
+		}
+		config.reasoningSummaries = enabled
+		return fmt.Sprintf("Reasoning summaries: %s (applies to the next model turn)", parts[1]), allowAll, true
 	case "/model":
 		if len(parts) == 1 {
 			if err := runtime.sessions.Record(ctx, handle, events.ModelListRequested, actor, events.ModelListRequestedPayload{Provider: config.provider}); err != nil {
@@ -774,6 +826,10 @@ func currentWorkspace() (string, error) {
 }
 
 func sendUIState(send func(ui.State) error, config config, messages []agent.Message, activities []uiToolActivity, pending *agent.PendingApproval, status string, mode agent.Mode) error {
+	return sendUIStateStream(send, config, messages, activities, pending, status, mode, uiStreamState{})
+}
+
+func sendUIStateStream(send func(ui.State) error, config config, messages []agent.Message, activities []uiToolActivity, pending *agent.PendingApproval, status string, mode agent.Mode, stream uiStreamState) error {
 	transcript := make([]ui.TranscriptEntry, 0, len(messages)+len(activities))
 	for index, message := range messages {
 		label, role := "You", "user"
@@ -786,7 +842,13 @@ func sendUIState(send func(ui.State) error, config config, messages []agent.Mess
 		transcript = appendToolActivities(transcript, activities, index+1, config.model)
 	}
 	transcript = appendToolActivities(transcript, activities, len(messages)+1, config.model)
-	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Transcript: transcript, Mode: string(mode)}
+	if stream.Reasoning != "" {
+		transcript = append(transcript, ui.TranscriptEntry{Role: "reasoning", Label: "Thinking", Content: stream.Reasoning})
+	}
+	if stream.Content != "" {
+		transcript = append(transcript, ui.TranscriptEntry{Role: "assistant", Label: config.model, Content: stream.Content})
+	}
+	state := ui.State{Phase: "chat", Provider: config.provider, Model: config.model, Theme: activeTheme(), Workspace: config.workspace, Status: status, Transcript: transcript, Mode: string(mode), ReasoningSummaries: config.reasoningSummaries}
 	if pending != nil {
 		state.Approval = &ui.Approval{Action: pending.Action, Summary: pending.Summary, Hash: pending.Hash}
 	}
@@ -875,9 +937,10 @@ type tuiRunner struct {
 
 func (r *tuiRunner) Turn(ctx context.Context, messages []agent.Message) (agent.LoopResult, error) {
 	return r.runtime.loop.RunWithApproval(ctx, r.handle, actor, r.runtime.provider, agent.CompletionRequest{
-		Model:    r.config.model,
-		Messages: messages,
-		Tools:    r.runtime.tools,
+		Model:              r.config.model,
+		Messages:           messages,
+		Tools:              r.runtime.tools,
+		ReasoningSummaries: r.config.reasoningSummaries,
 	})
 }
 
@@ -994,11 +1057,37 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer, 
 		_ = runtime.sessions.Fail(context.WithoutCancel(ctx), handle, actor, "output_failed")
 		return err
 	}
-	result, err := runtime.loop.RunWithApproval(ctx, handle, actor, runtime.provider, agent.CompletionRequest{
-		Model:    config.model,
-		Messages: []agent.Message{{Role: agent.RoleUser, Content: config.prompt}},
-		Tools:    runtime.tools,
-	})
+	streamed := false
+	thinkingShown := false
+	answerShown := false
+	streamObserver := func(event agent.StreamEvent) {
+		switch event.Kind {
+		case agent.StreamReasoning:
+			streamed = true
+			if !thinkingShown {
+				_, _ = fmt.Fprint(output, "\n[thinking]\n")
+				thinkingShown = true
+			}
+			_, _ = fmt.Fprint(output, event.Text)
+		case agent.StreamText:
+			streamed = true
+			if !answerShown {
+				if thinkingShown {
+					_, _ = fmt.Fprint(output, "\n\n[response]\n")
+				} else {
+					_, _ = fmt.Fprint(output, "\n")
+				}
+				answerShown = true
+			}
+			_, _ = fmt.Fprint(output, event.Text)
+		}
+	}
+	result, err := runtime.loop.RunWithApprovalStreamObserved(ctx, handle, actor, runtime.provider, agent.CompletionRequest{
+		Model:              config.model,
+		Messages:           []agent.Message{{Role: agent.RoleUser, Content: config.prompt}},
+		Tools:              runtime.tools,
+		ReasoningSummaries: config.reasoningSummaries,
+	}, nil, streamObserver)
 	for err == nil && result.Pending != nil {
 		approved, promptErr := promptApproval(input, output, result.Pending)
 		if promptErr != nil {
@@ -1006,12 +1095,15 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer, 
 			break
 		}
 		if approved {
-			result, err = runtime.loop.Approve(ctx, handle, actor, runtime.provider, result.Pending)
+			result, err = runtime.loop.ApproveStreamObserved(ctx, handle, actor, runtime.provider, result.Pending, nil, streamObserver)
 		} else {
-			result, err = runtime.loop.Deny(ctx, handle, actor, runtime.provider, result.Pending, "user_denied")
+			result, err = runtime.loop.DenyStreamObserved(ctx, handle, actor, runtime.provider, result.Pending, "user_denied", nil, streamObserver)
 		}
 	}
 	if err != nil {
+		if streamed {
+			_, _ = fmt.Fprintln(output)
+		}
 		_ = runtime.sessions.Fail(context.WithoutCancel(ctx), handle, actor, failureReason(ctx))
 		return err
 	}
@@ -1022,7 +1114,11 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer, 
 	if err := runtime.sessions.Finish(ctx, handle, actor, "completed"); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(output, result.Completion.Content)
+	if streamed {
+		_, err = fmt.Fprintln(output)
+	} else {
+		_, err = fmt.Fprintln(output, result.Completion.Content)
+	}
 	return err
 }
 
@@ -1075,6 +1171,7 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 	transport := flags.String("transport", settings.Transport, "OpenCode transport: responses or chat-completions")
 	model := flags.String("model", settings.Model, "model name")
 	workspaceRoot := flags.String("workspace", settings.Workspace, "workspace root")
+	reasoningSummaries := flags.Bool("reasoning-summaries", settings.ReasoningSummaries, "show provider reasoning summaries when supported")
 	if len(args) == 0 || args[0] != "run" {
 		return config{}, errors.New("usage: symphony run --provider PROVIDER --model MODEL [--workspace PATH] PROMPT")
 	}
@@ -1103,13 +1200,14 @@ func parseConfigWithSettings(args []string, settings appconfig.Settings) (config
 		return config{}, fmt.Errorf("resolve workspace path: %w", err)
 	}
 	return config{
-		provider:         *provider,
-		transport:        *transport,
-		model:            *model,
-		workspace:        root,
-		prompt:           flags.Arg(0),
-		connectionString: settings.KurrentDBURL,
-		apiKey:           providerAPIKey(*provider, settings),
+		provider:           *provider,
+		transport:          *transport,
+		model:              *model,
+		workspace:          root,
+		prompt:             flags.Arg(0),
+		connectionString:   settings.KurrentDBURL,
+		apiKey:             providerAPIKey(*provider, settings),
+		reasoningSummaries: *reasoningSummaries,
 	}, nil
 }
 
@@ -1128,12 +1226,13 @@ func configFromTUI(selected tui.SetupConfig, settings appconfig.Settings) (confi
 		return config{}, errors.New("model is required")
 	}
 	return config{
-		provider:         selected.Provider,
-		transport:        transport,
-		model:            selected.Model,
-		workspace:        selected.Workspace,
-		connectionString: localKurrentDBURL,
-		apiKey:           strings.TrimSpace(selected.APIKey),
+		provider:           selected.Provider,
+		transport:          transport,
+		model:              selected.Model,
+		workspace:          selected.Workspace,
+		connectionString:   localKurrentDBURL,
+		apiKey:             strings.TrimSpace(selected.APIKey),
+		reasoningSummaries: settings.ReasoningSummaries,
 	}, nil
 }
 
@@ -1231,15 +1330,36 @@ func newReplayReader(connectionString string) (replayReader, error) {
 }
 
 func providerAPIKey(provider string, settings appconfig.Settings) string {
+	var key string
 	switch provider {
 	case "openai":
-		return settings.OpenAIAPIKey
+		key = settings.OpenAIAPIKey
 	case "anthropic":
-		return settings.AnthropicAPIKey
+		key = settings.AnthropicAPIKey
 	case "opencode", "opencode-go":
-		return settings.OpenCodeAPIKey
+		key = settings.OpenCodeAPIKey
+	}
+	if strings.TrimSpace(key) != "" {
+		return strings.TrimSpace(key)
+	}
+	for _, environment := range providerAPIKeyEnvironment(provider) {
+		if key = strings.TrimSpace(os.Getenv(environment)); key != "" {
+			return key
+		}
+	}
+	return ""
+}
+
+func providerAPIKeyEnvironment(provider string) []string {
+	switch provider {
+	case "openai":
+		return []string{"OPENAI_API_KEY"}
+	case "anthropic":
+		return []string{"ANTHROPIC_API_KEY"}
+	case "opencode", "opencode-go":
+		return []string{"OPENCODE_API_KEY"}
 	default:
-		return ""
+		return nil
 	}
 }
 
@@ -1254,7 +1374,8 @@ func newProvider(name, transport, apiKey string) (agent.Provider, error) {
 		return opencode.New(opencode.Config{APIKey: apiKey, Transport: transport})
 	case "opencode-go":
 		if transport == "messages" {
-			return anthropic.New(anthropic.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go", ProviderName: "OpenCode Go", BearerAuth: true})
+			// The Go Messages endpoint expects Anthropic's x-api-key header.
+			return anthropic.New(anthropic.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go", ProviderName: "OpenCode Go"})
 		}
 		return opencode.New(opencode.Config{APIKey: apiKey, BaseURL: "https://opencode.ai/zen/go/v1", Transport: transport})
 	default:
