@@ -4,7 +4,7 @@ go 1.25.12
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/kurrent-io/KurrentDB-Client-Go v1.4.1
+	github.com/kurrent-io/KurrentDB-Client-Go v1.4.2
 	github.com/spf13/viper v1.21.0
 )
 
